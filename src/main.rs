@@ -30,13 +30,11 @@ async fn main(spawner: Spawner) {
     let p = embassy_rp::init(Default::default());
 
     // Release:
-    // https://github.com/embassy-rs/embassy/tree/main/cyw43-firmware
     // let fw = include_bytes!("../cyw43-firmware/43439A0.bin");
     // let clm = include_bytes!("../cyw43-firmware/43439A0_clm.bin");
     // let btfw = include_bytes!("../cyw43-firmware/43439A0_btfw.bin");
 
     // Dev
-    // Downloaded using the Just script: `just cyw43-dev`
     let fw = unsafe { core::slice::from_raw_parts(0x10100000 as *const u8, 224190) };
     let clm = unsafe { core::slice::from_raw_parts(0x10140000 as *const u8, 4752) };
     let btfw = unsafe { core::slice::from_raw_parts(0x10141400 as *const u8, 6164) };
