@@ -6,52 +6,81 @@ use defmt::*;
 use embassy_time::Duration;
 use trouble_host::prelude::*;
 
-pub async fn run<'a, C>(stack: Stack<'a, C>, mut central: Central<'a, C>)
+pub struct Ble<'a, C>
 where
     C: Controller + ControllerCmdSync<LeSetScanEnable> + ControllerCmdSync<LeSetScanParams>,
 {
-    info!("Sending Scanning params");
-    stack
-        .command(LeSetScanParams::new(
-            LeScanKind::Passive,
-            Duration::from_millis(10).into(),
-            Duration::from_millis(10).into(),
-            AddrKind::PUBLIC,
-            ScanningFilterPolicy::BasicUnfiltered,
-        ))
-        .await
-        .unwrap();
+    stack: Stack<'a, C>,
+    central: Central<'a, C>,
+    conn: Option<Connection<'a>>,
+}
 
-    info!("Searching for devices");
-    let devices = stack
-        .command(LeSetScanEnable::new(true, true))
-        .await
-        .unwrap();
+impl<'a, C> Ble<'a, C>
+where
+    C: Controller + ControllerCmdSync<LeSetScanEnable> + ControllerCmdSync<LeSetScanParams>,
+{
+    pub fn new(stack: Stack<'a, C>, central: Central<'a, C>) -> Self {
+        Self {
+            stack,
+            central,
+            conn: None,
+        }
+    }
 
-    info!("avalibe devices: {:?}", devices);
+    pub async fn scan(&mut self) {
+        info!("Sending Scanning params");
+        self.stack
+            .command(LeSetScanParams::new(
+                LeScanKind::Passive,
+                Duration::from_millis(10).into(),
+                Duration::from_millis(10).into(),
+                AddrKind::PUBLIC,
+                ScanningFilterPolicy::BasicUnfiltered,
+            ))
+            .await
+            .unwrap();
 
-    loop {
-        info!("Scanning for peripheral...");
-        'scan: loop {
-            info!("Connecting");
+        info!("Searching for devices");
+        let devices = self
+            .stack
+            .command(LeSetScanEnable::new(true, true))
+            .await
+            .unwrap();
 
-            let target: Address = Address::random([0xff, 0x8f, 0x1a, 0x05, 0xe4, 0xff]);
-            let config = ConnectConfig {
-                connect_params: Default::default(),
-                scan_config: ScanConfig {
-                    filter_accept_list: &[(target.kind, &target.addr)],
-                    ..Default::default()
-                },
-            };
+        info!("avalibe devices: {:?}", devices);
+    }
 
-            let conn = central.connect(&config).await.unwrap();
-            info!("Connected, creating gatt client");
+    pub async fn connect(&mut self, target: Address) {
+        info!("Connecting");
+        let config = ConnectConfig {
+            connect_params: Default::default(),
+            scan_config: ScanConfig {
+                filter_accept_list: &[(target.kind, &target.addr)],
+                ..Default::default()
+            },
+        };
 
-            // let client = GattClient::<C, 10, 24>::new(stack, &conn).await.unwrap();
+        self.conn = Some(self.central.connect(&config).await.unwrap());
+        info!("Connected, creating gatt client");
+    }
 
-            loop {
-                if !conn.is_connected() {
-                    break 'scan;
+    pub async fn run(&mut self) {
+        loop {
+            info!("Scanning for peripheral...");
+            'scan: loop {
+                self.connect(Address::random([0xff, 0x8f, 0x1a, 0x05, 0xe4, 0xff]))
+                    .await;
+
+                if let Some(conn) = &self.conn {
+                    let client = GattClient::<C, 10, 24>::new(self.stack, &conn)
+                        .await
+                        .unwrap();
+
+                    loop {
+                        if !conn.is_connected() {
+                            break 'scan;
+                        }
+                    }
                 }
             }
         }

@@ -84,5 +84,7 @@ async fn main(spawner: Spawner) {
     let (stack, _, central, runner) = trouble_host::new(controller, resources).build();
     unwrap!(spawner.spawn(bt_task(runner)));
 
-    ble_bas_central::run(stack, central).await;
+    let mut ble = ble_bas_central::Ble::new(stack, central);
+    ble.scan().await;
+    // ble.run().await;
 }
