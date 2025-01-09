@@ -10,8 +10,9 @@ use embassy_rp::bind_interrupts;
 use embassy_rp::gpio::{Level, Output};
 use embassy_rp::peripherals::{DMA_CH0, PIO0};
 use embassy_rp::pio::{InterruptHandler, Pio};
+use embassy_time::{Duration, Timer};
 use static_cell::StaticCell;
-use trouble_host::{HostResources, PacketQos};
+use trouble_host::{Address, BdAddr, HostResources, PacketQos};
 use {defmt_rtt as _, embassy_time as _, panic_probe as _};
 
 mod ble_bas_central;
@@ -78,6 +79,7 @@ async fn main(spawner: Spawner) {
     unwrap!(spawner.spawn(cyw43_task(runner)));
     control.init(clm).await;
 
+    Timer::after_millis(500).await; // wait for bt to come up
     let controller: Controller = ExternalController::new(bt_device);
     static RESOURCES: StaticCell<Resources<Controller>> = StaticCell::new();
     let resources = RESOURCES.init(Resources::new(PacketQos::None));
@@ -85,6 +87,31 @@ async fn main(spawner: Spawner) {
     unwrap!(spawner.spawn(bt_task(runner)));
 
     let mut ble = ble_bas_central::Ble::new(stack, central);
-    ble.scan().await;
+    ble.connect(BdAddr::new([0x9C, 0x73, 0xB1, 0x66, 0xCC, 0x92]))
+        .await;
+
+    loop {
+        Timer::after_secs(1).await;
+        let met = ble.conn_met().await;
+        info!("metrics conn: {}", met.connect_events);
+        info!("metrics dis: {}", met.disconnect_events);
+        info!("metrics errs: {}", met.rx_errors);
+    }
+
+    // info!("Searching for devices");
+    // loop {
+    //     if let Some(devices) = ble.scan(Duration::from_secs(10)).await {
+    //         for device in devices.iter() {
+    //             if let Ok(device) = device {
+    //                 info!("Device Found: {:?}", device);
+    //             } else {
+    //                 info!("Scan device err: {}", device.err());
+    //             }
+    //         }
+    //     } else {
+    //         info!("No devices found");
+    //     }
+    //     Timer::after_secs(1).await;
+    // }
     // ble.run().await;
 }
