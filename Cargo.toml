@@ -25,7 +25,7 @@ embassy-rp = { version = "0.2.0", features = [
 ] }
 embassy-futures = "0.1.1"
 embassy-sync = { version = "0.6", features = ["defmt"] }
-trouble-host = { version = "0.1", features = ["derive", "scan"] }
+trouble-host = { version = "0.1", features = ["defmt", "derive", "scan"] }
 
 futures = { version = "0.3", default-features = false, features = [
   "async-await",
@@ -46,6 +46,8 @@ cortex-m-rt = "0.7.0"
 panic-probe = { version = "0.3", features = ["print-defmt"] }
 static_cell = "2"
 portable-atomic = { version = "1.5", features = ["critical-section"] }
+
+trouble_audio = { git = "https://github.com/LegitCamper/trouble_audio/" }
 
 [build-dependencies]
 reqwest = { version = "0.12.9", features = ["blocking"] }

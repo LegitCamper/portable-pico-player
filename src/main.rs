@@ -15,7 +15,7 @@ use static_cell::StaticCell;
 use trouble_host::{Address, BdAddr, HostResources, PacketQos};
 use {defmt_rtt as _, embassy_time as _, panic_probe as _};
 
-mod ble_bas_central;
+mod ble;
 
 bind_interrupts!(struct Irqs {
     PIO0_IRQ_0 => InterruptHandler<PIO0>;
@@ -34,8 +34,19 @@ type Controller = ExternalController<BtDriver<'static>, 10>;
 type Resources<C> = HostResources<C, CONNECTIONS_MAX, L2CAP_CHANNELS_MAX, L2CAP_MTU>;
 
 #[embassy_executor::task]
-async fn bt_task(mut runner: trouble_host::prelude::Runner<'static, Controller>) {
-    runner.run().await.unwrap();
+async fn bt_task(mut runner: trouble_host::prelude::Runner<'static, Controller>) -> ! {
+    loop {
+        if let Err(error) = runner.run().await {
+            match error {
+                trouble_host::BleHostError::Controller(err) => {
+                    error!("Bt Controller error: {}", err)
+                }
+                trouble_host::BleHostError::BleHost(err) => {
+                    error!("Bt Host error: {}", err)
+                }
+            }
+        }
+    }
 }
 
 #[embassy_executor::task]
@@ -87,7 +98,8 @@ async fn main(spawner: Spawner) {
     unwrap!(spawner.spawn(bt_task(runner)));
 
     let mut ble = ble_bas_central::Ble::new(stack, central);
-    ble.connect(BdAddr::new([0x9C, 0x73, 0xB1, 0x66, 0xCC, 0x92]))
+    // ble.connect(BdAddr::new([0x9C, 0x73, 0xB1, 0x66, 0xCC, 0x92]))
+    ble.connect(BdAddr::new([0xff, 0x8f, 0x1a, 0x05, 0xe4, 0xff]))
         .await;
 
     loop {
