@@ -94,36 +94,8 @@ async fn main(spawner: Spawner) {
     let controller: Controller = ExternalController::new(bt_device);
     static RESOURCES: StaticCell<Resources<Controller>> = StaticCell::new();
     let resources = RESOURCES.init(Resources::new(PacketQos::None));
-    let (stack, _, central, runner) = trouble_host::new(controller, resources).build();
+    let (stack, peripheral, central, runner) = trouble_host::new(controller, resources).build();
     unwrap!(spawner.spawn(bt_task(runner)));
 
-    let mut ble = ble_bas_central::Ble::new(stack, central);
-    // ble.connect(BdAddr::new([0x9C, 0x73, 0xB1, 0x66, 0xCC, 0x92]))
-    ble.connect(BdAddr::new([0xff, 0x8f, 0x1a, 0x05, 0xe4, 0xff]))
-        .await;
-
-    loop {
-        Timer::after_secs(1).await;
-        let met = ble.conn_met().await;
-        info!("metrics conn: {}", met.connect_events);
-        info!("metrics dis: {}", met.disconnect_events);
-        info!("metrics errs: {}", met.rx_errors);
-    }
-
-    // info!("Searching for devices");
-    // loop {
-    //     if let Some(devices) = ble.scan(Duration::from_secs(10)).await {
-    //         for device in devices.iter() {
-    //             if let Ok(device) = device {
-    //                 info!("Device Found: {:?}", device);
-    //             } else {
-    //                 info!("Scan device err: {}", device.err());
-    //             }
-    //         }
-    //     } else {
-    //         info!("No devices found");
-    //     }
-    //     Timer::after_secs(1).await;
-    // }
-    // ble.run().await;
+    // peripheral.
 }

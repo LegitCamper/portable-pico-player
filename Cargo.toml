@@ -4,22 +4,19 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-embassy-executor = { version = "0.6", default-features = false, features = [
+embassy-executor = { version = "0.7", default-features = false, features = [
   "task-arena-size-98304",
   "arch-cortex-m",
   "executor-thread",
   "defmt",
-  "integrated-timers",
   "executor-interrupt",
 ] }
-embassy-time = { version = "0.3.0", default-features = false, features = [
+embassy-time = { version = "0.4.0", default-features = false, features = [
   "defmt",
-  "defmt-timestamp-uptime",
 ] }
-embassy-rp = { version = "0.2.0", features = [
+embassy-rp = { version = "0.3.0", features = [
   "defmt",
   "unstable-pac",
-  "time-driver",
   "critical-section-impl",
   "rp2040",
 ] }
@@ -31,12 +28,8 @@ futures = { version = "0.3", default-features = false, features = [
   "async-await",
 ] }
 bt-hci = { version = "0.1.1", default-features = false, features = ["defmt"] }
-cyw43 = { version = "0.2.0", features = [
-  "defmt",
-  "firmware-logs",
-  "bluetooth",
-] }
-cyw43-pio = { version = "0.2.0", features = ["defmt"] }
+cyw43 = { version = "0.3.0", features = ["defmt", "firmware-logs"] }
+cyw43-pio = { version = "0.3.0", features = ["defmt"] }
 
 defmt = "0.3"
 defmt-rtt = "0.4.0"
@@ -47,7 +40,8 @@ panic-probe = { version = "0.3", features = ["print-defmt"] }
 static_cell = "2"
 portable-atomic = { version = "1.5", features = ["critical-section"] }
 
-trouble_audio = { git = "https://github.com/LegitCamper/trouble_audio/" }
+# trouble_audio = { git = "https://github.com/LegitCamper/trouble_audio/" }
+# trouble_audio = { path = "../trouble_audio/" }
 
 [build-dependencies]
 reqwest = { version = "0.12.9", features = ["blocking"] }
@@ -59,13 +53,12 @@ skip-cyw43-firmware = []
 debug = 2
 
 [patch.crates-io]
-embassy-executor = { git = "https://github.com/embassy-rs/embassy.git", rev = "d6a8dce6eef22564160bf25b20528b8b78ec63b8" }
-embassy-rp = { git = "https://github.com/embassy-rs/embassy.git", rev = "d6a8dce6eef22564160bf25b20528b8b78ec63b8" }
-embassy-sync = { git = "https://github.com/embassy-rs/embassy.git", rev = "d6a8dce6eef22564160bf25b20528b8b78ec63b8" }
-embassy-futures = { git = "https://github.com/embassy-rs/embassy.git", rev = "d6a8dce6eef22564160bf25b20528b8b78ec63b8" }
-embassy-time = { git = "https://github.com/embassy-rs/embassy.git", rev = "d6a8dce6eef22564160bf25b20528b8b78ec63b8" }
-embassy-time-driver = { git = "https://github.com/embassy-rs/embassy.git", rev = "d6a8dce6eef22564160bf25b20528b8b78ec63b8" }
-embassy-embedded-hal = { git = "https://github.com/embassy-rs/embassy.git", rev = "d6a8dce6eef22564160bf25b20528b8b78ec63b8" }
-cyw43 = { git = "https://github.com/embassy-rs/embassy.git", rev = "d6a8dce6eef22564160bf25b20528b8b78ec63b8" }
-cyw43-pio = { git = "https://github.com/embassy-rs/embassy.git", rev = "d6a8dce6eef22564160bf25b20528b8b78ec63b8" }
-trouble-host = { git = "https://github.com/embassy-rs/trouble.git", rev = "5e55ac1c08b200cd53bdb34aae7ba8be0f35da9c" }
+embassy-executor = { git = "https://github.com/embassy-rs/embassy.git", rev = "195b1a593a4f51ebc7ae61b5045c620a1dbd25d8" }
+embassy-rp = { git = "https://github.com/embassy-rs/embassy.git", rev = "195b1a593a4f51ebc7ae61b5045c620a1dbd25d8" }
+embassy-sync = { git = "https://github.com/embassy-rs/embassy.git", rev = "195b1a593a4f51ebc7ae61b5045c620a1dbd25d8" }
+embassy-futures = { git = "https://github.com/embassy-rs/embassy.git", rev = "195b1a593a4f51ebc7ae61b5045c620a1dbd25d8" }
+embassy-time = { git = "https://github.com/embassy-rs/embassy.git", rev = "195b1a593a4f51ebc7ae61b5045c620a1dbd25d8" }
+embassy-embedded-hal = { git = "https://github.com/embassy-rs/embassy.git", rev = "195b1a593a4f51ebc7ae61b5045c620a1dbd25d8" }
+cyw43 = { git = "https://github.com/embassy-rs/embassy.git", rev = "195b1a593a4f51ebc7ae61b5045c620a1dbd25d8" }
+cyw43-pio = { git = "https://github.com/embassy-rs/embassy.git", rev = "195b1a593a4f51ebc7ae61b5045c620a1dbd25d8" }
+trouble-host = { git = "https://github.com/embassy-rs/trouble.git", rev = "e1940e89144096bc69b3c38745c3e13203135775" }
