@@ -2,7 +2,6 @@
 #![no_main]
 
 use bt_hci::controller::ExternalController;
-use cyw43::bluetooth::BtDriver;
 use cyw43_pio::PioSpi;
 use defmt::*;
 use embassy_executor::Spawner;
@@ -10,8 +9,8 @@ use embassy_rp::bind_interrupts;
 use embassy_rp::gpio::{Level, Output};
 use embassy_rp::peripherals::{DMA_CH0, PIO0};
 use embassy_rp::pio::{InterruptHandler, Pio};
-use embassy_time::Timer;
 use static_cell::StaticCell;
+use trouble_audio::*;
 use trouble_host::{HostResources, prelude::*};
 use {defmt_rtt as _, embassy_time as _, panic_probe as _};
 
@@ -20,34 +19,6 @@ mod ble;
 bind_interrupts!(struct Irqs {
     PIO0_IRQ_0 => InterruptHandler<PIO0>;
 });
-
-/// Size of L2CAP packets
-const L2CAP_MTU: usize = 128;
-
-/// Max number of connections
-const CONNECTIONS_MAX: usize = 1;
-
-/// Max number of L2CAP channels.
-const L2CAP_CHANNELS_MAX: usize = 3; // Signal + att + CoC
-
-type Controller = ExternalController<BtDriver<'static>, 10>;
-type Resources = HostResources<CONNECTIONS_MAX, L2CAP_CHANNELS_MAX, L2CAP_MTU>;
-
-#[embassy_executor::task]
-async fn bt_task(mut runner: trouble_host::prelude::Runner<'static, Controller>) -> ! {
-    loop {
-        if let Err(error) = runner.run().await {
-            match error {
-                trouble_host::BleHostError::Controller(err) => {
-                    error!("Bt Controller error: {}", err)
-                }
-                trouble_host::BleHostError::BleHost(err) => {
-                    error!("Bt Host error: {}", err)
-                }
-            }
-        }
-    }
-}
 
 #[embassy_executor::task]
 async fn cyw43_task(
@@ -90,25 +61,33 @@ async fn main(spawner: Spawner) {
         cyw43::new_with_bluetooth(state, pwr, spi, fw, btfw).await;
     unwrap!(spawner.spawn(cyw43_task(runner)));
     control.init(clm).await;
+    let controller: ble::Controller = ExternalController::new(bt_device);
 
     // Using a fixed "random" address can be useful for testing. In real scenarios, one would
     // use e.g. the MAC 6 byte array as the address (how to get that varies by the platform).
     let address: Address = Address::random([0xff, 0x8f, 0x1b, 0x05, 0xe4, 0xff]);
     info!("Our address = {:?}", address);
 
-    let controller: Controller = ExternalController::new(bt_device);
-
-    static RESOURCES: StaticCell<Resources> = StaticCell::new();
-    static STACK: StaticCell<Stack<Controller>> = StaticCell::new();
+    static RESOURCES: StaticCell<ble::Resources> = StaticCell::new();
+    static STACK: StaticCell<Stack<ble::Controller>> = StaticCell::new();
     let stack = STACK.init(
         trouble_host::new(controller, RESOURCES.init(HostResources::new()))
             .set_random_address(address),
     );
     let Host {
         mut central,
-        mut runner,
+        runner,
         mut peripheral,
         ..
     } = stack.build();
-    unwrap!(spawner.spawn(bt_task(runner)));
+    info!("starting bt task");
+    unwrap!(spawner.spawn(ble::bt_task(runner)));
+
+    trouble_audio::create_run(
+        DeviceRole::Peripheral,
+        "Sawyers Audio",
+        &mut central,
+        &mut peripheral,
+    )
+    .await
 }
