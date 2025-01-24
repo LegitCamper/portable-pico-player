@@ -9,7 +9,7 @@ use bt_hci::event::CommandComplete;
 use bt_hci::param::{AddrKind, ConnHandle, LeEventMask, LeScanKind, ScanningFilterPolicy};
 use defmt::*;
 use embassy_time::Duration;
-use trouble_host::{BdAddr, prelude::*};
+use trouble_host::prelude::*;
 
 pub struct Ble<'a, C>
 where
@@ -22,7 +22,10 @@ where
 
 impl<'a, C> Ble<'a, C>
 where
-    C: Controller + ControllerCmdSync<LeSetScanEnable> + ControllerCmdSync<LeSetScanParams>,
+    C: Controller
+        + ControllerCmdSync<LeSetScanEnable>
+        + ControllerCmdSync<LeSetScanParams>
+        + ControllerCmdSync<Reset>,
 {
     pub fn new(stack: Stack<'a, C>, central: Central<'a, C>) -> Self {
         Self {
@@ -36,20 +39,20 @@ where
         self.stack.command(Reset::new()).await.unwrap();
     }
 
-    pub async fn scan(&mut self, timeout: Duration) -> Option<ScanReport> {
-        info!("Scanning enabling");
-        self.central
-            .scan(&ScanConfig {
-                active: true,
-                filter_accept_list: &[],
-                phys: PhySet::M2,
-                interval: Duration::from_millis(100),
-                window: Duration::from_millis(50),
-                timeout,
-            })
-            .await
-            .ok()
-    }
+    // pub async fn scan(&mut self, timeout: Duration) -> Option<ScanReport> {
+    //     info!("Scanning enabling");
+    //     self.central
+    //         .scan(&ScanConfig {
+    //             active: true,
+    //             filter_accept_list: &[],
+    //             phys: PhySet::M2,
+    //             interval: Duration::from_millis(100),
+    //             window: Duration::from_millis(50),
+    //             timeout,
+    //         })
+    //         .await
+    //         .ok()
+    // }
 
     pub async fn connect(&mut self, addr: BdAddr) {
         info!("Connecting");

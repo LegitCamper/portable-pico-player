@@ -35,6 +35,7 @@ fn main() {
     println!("cargo:rustc-link-arg-bins=-Tdefmt.x");
 }
 
+#[allow(dead_code)]
 #[cfg(not(feature = "skip-cyw43-firmware"))]
 fn download_cyw43_firmware() {
     let download_folder = "cyw43-firmware";

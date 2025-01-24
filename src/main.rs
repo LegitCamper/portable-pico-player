@@ -10,9 +10,9 @@ use embassy_rp::bind_interrupts;
 use embassy_rp::gpio::{Level, Output};
 use embassy_rp::peripherals::{DMA_CH0, PIO0};
 use embassy_rp::pio::{InterruptHandler, Pio};
-use embassy_time::{Duration, Timer};
+use embassy_time::Timer;
 use static_cell::StaticCell;
-use trouble_host::{Address, BdAddr, HostResources, PacketQos};
+use trouble_host::{HostResources, prelude::*};
 use {defmt_rtt as _, embassy_time as _, panic_probe as _};
 
 mod ble;
@@ -31,7 +31,7 @@ const CONNECTIONS_MAX: usize = 1;
 const L2CAP_CHANNELS_MAX: usize = 3; // Signal + att + CoC
 
 type Controller = ExternalController<BtDriver<'static>, 10>;
-type Resources<C> = HostResources<C, CONNECTIONS_MAX, L2CAP_CHANNELS_MAX, L2CAP_MTU>;
+type Resources = HostResources<CONNECTIONS_MAX, L2CAP_CHANNELS_MAX, L2CAP_MTU>;
 
 #[embassy_executor::task]
 async fn bt_task(mut runner: trouble_host::prelude::Runner<'static, Controller>) -> ! {
@@ -76,6 +76,7 @@ async fn main(spawner: Spawner) {
     let spi = PioSpi::new(
         &mut pio.common,
         pio.sm0,
+        cyw43_pio::DEFAULT_CLOCK_DIVIDER,
         pio.irq0,
         cs,
         p.PIN_24,
@@ -90,12 +91,24 @@ async fn main(spawner: Spawner) {
     unwrap!(spawner.spawn(cyw43_task(runner)));
     control.init(clm).await;
 
-    Timer::after_millis(500).await; // wait for bt to come up
-    let controller: Controller = ExternalController::new(bt_device);
-    static RESOURCES: StaticCell<Resources<Controller>> = StaticCell::new();
-    let resources = RESOURCES.init(Resources::new(PacketQos::None));
-    let (stack, peripheral, central, runner) = trouble_host::new(controller, resources).build();
-    unwrap!(spawner.spawn(bt_task(runner)));
+    // Using a fixed "random" address can be useful for testing. In real scenarios, one would
+    // use e.g. the MAC 6 byte array as the address (how to get that varies by the platform).
+    let address: Address = Address::random([0xff, 0x8f, 0x1b, 0x05, 0xe4, 0xff]);
+    info!("Our address = {:?}", address);
 
-    // peripheral.
+    let controller: Controller = ExternalController::new(bt_device);
+
+    static RESOURCES: StaticCell<Resources> = StaticCell::new();
+    static STACK: StaticCell<Stack<Controller>> = StaticCell::new();
+    let stack = STACK.init(
+        trouble_host::new(controller, RESOURCES.init(HostResources::new()))
+            .set_random_address(address),
+    );
+    let Host {
+        mut central,
+        mut runner,
+        mut peripheral,
+        ..
+    } = stack.build();
+    unwrap!(spawner.spawn(bt_task(runner)));
 }
