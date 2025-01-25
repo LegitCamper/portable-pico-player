@@ -1,6 +1,8 @@
 #![no_std]
 #![no_main]
 
+use core::time::Duration;
+
 use bt_hci::controller::ExternalController;
 use cyw43_pio::PioSpi;
 use defmt::*;
@@ -10,7 +12,6 @@ use embassy_rp::gpio::{Level, Output};
 use embassy_rp::peripherals::{DMA_CH0, PIO0};
 use embassy_rp::pio::{InterruptHandler, Pio};
 use static_cell::StaticCell;
-use trouble_audio::*;
 use trouble_host::{HostResources, prelude::*};
 use {defmt_rtt as _, embassy_time as _, panic_probe as _};
 
@@ -77,17 +78,16 @@ async fn main(spawner: Spawner) {
     let Host {
         mut central,
         runner,
-        mut peripheral,
+        peripheral: _,
         ..
     } = stack.build();
     info!("starting bt task");
     unwrap!(spawner.spawn(ble::bt_task(runner)));
 
-    trouble_audio::create_run(
-        DeviceRole::Peripheral,
-        "Sawyers Audio",
-        &mut central,
-        &mut peripheral,
-    )
-    .await
+    static TARGET: StaticCell<BdAddr> = StaticCell::new();
+    let target = TARGET.init(BdAddr::new([0x10, 0xB1, 0xDF, 0xB8, 0x06, 0x12]));
+    static TARGETS: StaticCell<[(AddrKind, &BdAddr); 1]> = StaticCell::new();
+    let targets = TARGETS.init([(AddrKind::RANDOM, target)]);
+
+    trouble_audio::run_server("Pico Audio Player", &mut central, targets).await
 }
