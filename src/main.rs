@@ -1,17 +1,17 @@
 #![no_std]
 #![no_main]
 
-use core::time::Duration;
-
 use bt_hci::controller::ExternalController;
 use cyw43_pio::PioSpi;
 use defmt::*;
 use embassy_executor::Spawner;
+use embassy_futures::select::select;
 use embassy_rp::bind_interrupts;
 use embassy_rp::gpio::{Level, Output};
 use embassy_rp::peripherals::{DMA_CH0, PIO0};
 use embassy_rp::pio::{InterruptHandler, Pio};
 use static_cell::StaticCell;
+use trouble_host::prelude::Controller;
 use trouble_host::{HostResources, prelude::*};
 use {defmt_rtt as _, embassy_time as _, panic_probe as _};
 
@@ -27,6 +27,14 @@ async fn cyw43_task(
 ) -> ! {
     runner.run().await
 }
+
+/// Max number of connections
+const CONNECTIONS_MAX: usize = 1;
+
+/// Max number of L2CAP channels.
+const L2CAP_CHANNELS_MAX: usize = 2; // Signal + att
+
+const L2CAP_MTU: usize = 128;
 
 #[embassy_executor::main]
 async fn main(spawner: Spawner) {
@@ -76,18 +84,106 @@ async fn main(spawner: Spawner) {
             .set_random_address(address),
     );
     let Host {
-        mut central,
+        central: _,
         runner,
-        peripheral: _,
+        mut peripheral,
         ..
     } = stack.build();
     info!("starting bt task");
     unwrap!(spawner.spawn(ble::bt_task(runner)));
 
-    static TARGET: StaticCell<BdAddr> = StaticCell::new();
-    let target = TARGET.init(BdAddr::new([0x10, 0xB1, 0xDF, 0xB8, 0x06, 0x12]));
-    static TARGETS: StaticCell<[(AddrKind, &BdAddr); 1]> = StaticCell::new();
-    let targets = TARGETS.init([(AddrKind::RANDOM, target)]);
+    // Sample BT LE Audio Peripheral
+    {
+        info!("Starting advertising and GATT service");
+        let server = Server::new_with_config(GapConfig::Peripheral(PeripheralConfig {
+            name: "Pico Speaker Test",
+            appearance: &appearance::audio_sink::GENERIC_AUDIO_SINK,
+        }))
+        .unwrap();
 
-    trouble_audio::run_server("Pico Audio Player", &mut central, targets).await
+        loop {
+            match advertise("Pico Speaker Test", &mut peripheral).await {
+                Ok(conn) => {
+                    let client = GattClient::<ble::Controller, 10, 24>::new(stack, &conn)
+                        .await
+                        .unwrap();
+
+                    select(
+                        select(client.task(), trouble_audio::pacs::source_client(&client)),
+                        async {
+                            loop {
+                                match conn.next().await {
+                                    ConnectionEvent::Disconnected { reason } => {
+                                        info!("[gatt] disconnected: {:?}", reason);
+                                        break;
+                                    }
+                                    ConnectionEvent::Gatt { data } => {
+                                        let event = data.process(&server).await;
+                                        match event {
+                                            Ok(event) => {
+                                                if let Some(data) = event {
+                                                    // trouble_audio::pacs::source_server::<
+                                                    //     ble::Controller,
+                                                    //     10,
+                                                    // >(
+                                                    //     &server.pacs, &data
+                                                    // );
+                                                }
+                                            }
+                                            Err(e) => {
+                                                warn!("[gatt] error processing event: {:?}", e);
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        },
+                    )
+                    .await;
+                }
+                Err(e) => {
+                    let e = defmt::Debug2Format(&e);
+                    defmt::panic!("[adv] error: {:?}", e);
+                }
+            }
+        }
+    }
+}
+
+// GATT Server definition
+#[gatt_server]
+struct Server {
+    pacs: trouble_audio::pacs::PacsSource,
+}
+
+/// Create an advertiser to use to connect to a BLE Central, and wait for it to connect.
+async fn advertise<'a, C: Controller>(
+    name: &'a str,
+    peripheral: &mut Peripheral<'a, C>,
+) -> Result<Connection<'a>, BleHostError<C::Error>> {
+    let mut advertiser_data = [0; 31];
+    AdStructure::encode_slice(
+        &[
+            AdStructure::Flags(LE_GENERAL_DISCOVERABLE | BR_EDR_NOT_SUPPORTED),
+            // This should match `Server`
+            AdStructure::ServiceUuids16(&[Uuid::from(
+                bt_hci::uuid::service::PUBLISHED_AUDIO_CAPABILITIES,
+            )]),
+            AdStructure::CompleteLocalName(name.as_bytes()),
+        ],
+        &mut advertiser_data[..],
+    )?;
+    let advertiser = peripheral
+        .advertise(
+            &Default::default(),
+            Advertisement::ConnectableScannableUndirected {
+                adv_data: &advertiser_data[..],
+                scan_data: &[],
+            },
+        )
+        .await?;
+    info!("[adv] advertising");
+    let conn = advertiser.accept().await?;
+    info!("[adv] connection established");
+    Ok(conn)
 }
