@@ -3,9 +3,9 @@ use cyw43::bluetooth::BtDriver;
 use defmt::*;
 use embassy_futures::select::select;
 use trouble_host::prelude::{
-    AdStructure, Advertisement, BR_EDR_NOT_SUPPORTED, BleHostError, Central, Connection,
-    ConnectionEvent, GapConfig, GattClient, HostResources, LE_GENERAL_DISCOVERABLE, Peripheral,
-    PeripheralConfig, Runner, Stack, Uuid, appearance, gatt_server,
+    AdStructure, Advertisement, BR_EDR_NOT_SUPPORTED, BleHostError, Connection, ConnectionEvent,
+    GapConfig, GattClient, HostResources, LE_GENERAL_DISCOVERABLE, Peripheral, PeripheralConfig,
+    Runner, Stack, Uuid, appearance, gatt_server,
 };
 
 /// Size of L2CAP packets
@@ -22,15 +22,11 @@ const CONTROLLER_SLOTS: usize = 10;
 pub type ControllerT = ExternalController<BtDriver<'static>, CONTROLLER_SLOTS>;
 pub type Resources = HostResources<CONNECTIONS_MAX, L2CAP_CHANNELS_MAX, L2CAP_MTU>;
 
-pub async fn bt_task(runner: &mut Runner<'static, ControllerT>) {
-    if let Err(error) = runner.run().await {
-        match error {
-            trouble_host::BleHostError::Controller(err) => {
-                error!("Bt Controller error: {}", err)
-            }
-            trouble_host::BleHostError::BleHost(err) => {
-                error!("Bt Host error: {}", err)
-            }
+pub async fn ble_task(runner: &mut Runner<'_, ControllerT>) {
+    loop {
+        if let Err(e) = runner.run().await {
+            let e = defmt::Debug2Format(&e);
+            defmt::panic!("[ble_task] error: {:?}", e);
         }
     }
 }

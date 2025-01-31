@@ -5,7 +5,7 @@ use bt_hci::controller::ExternalController;
 use cyw43_pio::PioSpi;
 use defmt::*;
 use embassy_executor::Spawner;
-use embassy_futures::select::select;
+use embassy_futures::join::join;
 use embassy_rp::bind_interrupts;
 use embassy_rp::gpio::{Level, Output};
 use embassy_rp::peripherals::{DMA_CH0, PIO0};
@@ -69,11 +69,8 @@ async fn main(spawner: Spawner) {
     info!("Our address = {:?}", address);
 
     static RESOURCES: StaticCell<ble::Resources> = StaticCell::new();
-    static STACK: StaticCell<Stack<ble::ControllerT>> = StaticCell::new();
-    let stack = STACK.init(
-        trouble_host::new(controller, RESOURCES.init(HostResources::new()))
-            .set_random_address(address),
-    );
+    let stack = trouble_host::new(controller, RESOURCES.init(HostResources::new()))
+        .set_random_address(address);
     let Host {
         central: _,
         mut runner,
@@ -82,11 +79,9 @@ async fn main(spawner: Spawner) {
     } = stack.build();
     info!("starting bt task");
 
-    loop {
-        select(
-            ble::bt_task(&mut runner),
-            ble::le_audio_periphery_test(&mut peripheral, stack),
-        )
-        .await;
-    }
+    join(
+        ble::ble_task(&mut runner),
+        ble::le_audio_periphery_test(&mut peripheral, &stack),
+    )
+    .await;
 }
