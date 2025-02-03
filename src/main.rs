@@ -1,9 +1,6 @@
 #![no_std]
 #![no_main]
 
-use core::fmt::Write;
-use core::ops::BitAndAssign;
-
 use bt_hci::controller::ExternalController;
 use cyw43_pio::PioSpi;
 use defmt::*;
@@ -11,19 +8,22 @@ use embassy_executor::Spawner;
 use embassy_futures::select::select;
 use embassy_rp::bind_interrupts;
 use embassy_rp::gpio::{Level, Output};
-use embassy_rp::i2c::{self, Async, Config};
+use embassy_rp::i2c;
 use embassy_rp::peripherals::{DMA_CH0, I2C0, PIO0};
 use embassy_rp::pio::{self, Pio};
-use embassy_time::{Duration, Timer};
-use ssd1306::mode::{DisplayConfig, TerminalMode};
-use ssd1306::prelude::{DisplayRotation, I2CInterface};
-use ssd1306::size::DisplaySize128x32;
-use ssd1306::{I2CDisplayInterface, Ssd1306};
+use embassy_rp::spi;
+use embedded_hal_bus::spi::ExclusiveDevice;
+use embedded_sdmmc::sdcard::{DummyCsPin, SdCard};
+use human_bytes::human_bytes;
 use static_cell::StaticCell;
 use trouble_host::{HostResources, prelude::*};
 use {defmt_rtt as _, embassy_time as _, panic_probe as _};
 
 mod ble;
+mod display;
+use display::display_task;
+mod storage;
+use storage::storage_task;
 
 bind_interrupts!(struct Irqs {
     PIO0_IRQ_0 => pio::InterruptHandler<PIO0>;
@@ -39,11 +39,36 @@ async fn cyw43_task(
 
 #[embassy_executor::main]
 async fn main(spawner: Spawner) {
+    embassy_rp::pac::SIO.spinlock(31).write_value(1);
     let p = embassy_rp::init(Default::default());
 
     // Set up I2C0 for the SSD1306 OLED Display
-    let i2c0 = i2c::I2c::new_async(p.I2C0, p.PIN_1, p.PIN_0, Irqs, Config::default());
+    let i2c0 = i2c::I2c::new_async(p.I2C0, p.PIN_1, p.PIN_0, Irqs, i2c::Config::default());
     unwrap!(spawner.spawn(display_task(i2c0)));
+
+    // Set up SPI0 for the Micro SD reader
+    {
+        let mut config = spi::Config::default();
+        config.frequency = 400_000;
+        let spi = spi::Spi::new_blocking(p.SPI0, p.PIN_2, p.PIN_3, p.PIN_4, config);
+        // Use a dummy cs pin here, for embedded-hal SpiDevice compatibility reasons
+        let spi_dev = ExclusiveDevice::new_no_delay(spi, DummyCsPin);
+        // Real cs pin
+        let cs = Output::new(p.PIN_5, Level::High);
+
+        let sdcard = SdCard::new(spi_dev, cs, embassy_time::Delay);
+        info!(
+            "Card size is {} bytes",
+            human_bytes(sdcard.num_bytes().unwrap())
+        );
+
+        // Now that the card is initialized, the SPI clock can go faster
+        let mut config = spi::Config::default();
+        config.frequency = 16_000_000;
+        sdcard.spi(|dev| dev.bus_mut().set_config(&config));
+
+        unwrap!(spawner.spawn(storage_task(sdcard)));
+    }
 
     // Release:
     #[cfg(not(debug_assertions))]
@@ -103,98 +128,4 @@ async fn main(spawner: Spawner) {
     //     ble::le_audio_periphery_test(&mut peripheral, &stack),
     // )
     // .await;
-}
-
-#[embassy_executor::task]
-async fn display_task(i2c0: embassy_rp::i2c::I2c<'static, I2C0, Async>) {
-    let interface = I2CDisplayInterface::new(i2c0);
-    let display =
-        Ssd1306::new(interface, DisplaySize128x32, DisplayRotation::Rotate0).into_terminal_mode();
-
-    let mut ui = MediaUi::new(display, 50);
-
-    ui.draw();
-}
-pub struct MediaUi<'a> {
-    display: Ssd1306<
-        I2CInterface<embassy_rp::i2c::I2c<'a, I2C0, embassy_rp::i2c::Async>>,
-        DisplaySize128x32,
-        TerminalMode,
-    >,
-    paused: bool,
-    song: &'a str,
-    volume: u8,
-}
-
-impl<'a> MediaUi<'a> {
-    const VOLUME: u8 = 0;
-    const SONG: u8 = 2;
-    const MEDIA_CONTROLS: u8 = 3;
-
-    fn new(
-        mut display: Ssd1306<
-            I2CInterface<embassy_rp::i2c::I2c<'a, I2C0, embassy_rp::i2c::Async>>,
-            DisplaySize128x32,
-            TerminalMode,
-        >,
-        volume: u8,
-    ) -> Self {
-        display.init().unwrap();
-        display.clear().unwrap();
-
-        Self {
-            display,
-            paused: true,
-            song: "Not Playing",
-            volume,
-        }
-    }
-
-    pub fn center_str(&self, text: &str) -> u8 {
-        let (width, _height) = self.display.dimensions();
-        let width = width / 8;
-
-        (width - text.len() as u8) / 2
-    }
-
-    pub fn center_int(&self, num: u8) -> u8 {
-        let (width, _height) = self.display.dimensions();
-        let width = width / 8;
-
-        if num < 10 {
-            (width - num as u8) / 2
-        } else if num < 100 {
-            (width - 2 as u8) / 2
-        } else {
-            (width - 3 as u8) / 2
-        }
-    }
-
-    pub fn center_width(&self, item_width: u8) -> u8 {
-        let (width, _height) = self.display.dimensions();
-        let width = width / 8;
-
-        (width - item_width) / 2
-    }
-
-    fn draw(&mut self) {
-        self.display
-            .set_position(self.center_int(self.volume), Self::VOLUME)
-            .unwrap();
-        let vol = [self.volume];
-        self.display
-            .write_str(unsafe { core::str::from_utf8_unchecked(&vol) })
-            .unwrap();
-        self.display.write_str("%").unwrap();
-
-        self.display
-            .set_position(self.center_str(&self.song), Self::SONG)
-            .unwrap();
-        self.display.write_str(&self.song).unwrap();
-
-        self.display
-            .set_position(self.center_width(5), Self::MEDIA_CONTROLS)
-            .unwrap();
-        self.display.write_str("B P N").unwrap();
-    }
 }
