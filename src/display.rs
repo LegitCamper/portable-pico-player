@@ -30,6 +30,7 @@ pub async fn display_task(i2c0: embassy_rp::i2c::I2c<'static, I2C0, Async>) {
 
     ui.draw();
 }
+
 struct MediaUi<'a> {
     display: Ssd1306<
         I2CInterface<embassy_rp::i2c::I2c<'a, I2C0, embassy_rp::i2c::Async>>,

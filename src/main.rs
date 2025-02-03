@@ -14,7 +14,6 @@ use embassy_rp::pio::{self, Pio};
 use embassy_rp::spi;
 use embedded_hal_bus::spi::ExclusiveDevice;
 use embedded_sdmmc::sdcard::{DummyCsPin, SdCard};
-use human_bytes::human_bytes;
 use static_cell::StaticCell;
 use trouble_host::{HostResources, prelude::*};
 use {defmt_rtt as _, embassy_time as _, panic_probe as _};
@@ -23,7 +22,6 @@ mod ble;
 mod display;
 use display::display_task;
 mod storage;
-use storage::storage_task;
 
 bind_interrupts!(struct Irqs {
     PIO0_IRQ_0 => pio::InterruptHandler<PIO0>;
@@ -57,75 +55,77 @@ async fn main(spawner: Spawner) {
         let cs = Output::new(p.PIN_5, Level::High);
 
         let sdcard = SdCard::new(spi_dev, cs, embassy_time::Delay);
-        info!(
-            "Card size is {} bytes",
-            human_bytes(sdcard.num_bytes().unwrap())
-        );
+        info!("Card size is {} bytes", sdcard.num_bytes().unwrap());
 
         // Now that the card is initialized, the SPI clock can go faster
         let mut config = spi::Config::default();
         config.frequency = 16_000_000;
         sdcard.spi(|dev| dev.bus_mut().set_config(&config));
 
-        unwrap!(spawner.spawn(storage_task(sdcard)));
+        // unwrap!(spawner.spawn(storage_task(sdcard)));
+        let mut sd = storage::Library::new(sdcard);
+        sd.list_files();
     }
 
-    // Release:
-    #[cfg(not(debug_assertions))]
-    let fw = include_bytes!("../cyw43-firmware/43439A0.bin");
-    #[cfg(not(debug_assertions))]
-    let clm = include_bytes!("../cyw43-firmware/43439A0_clm.bin");
-    #[cfg(not(debug_assertions))]
-    let btfw = include_bytes!("../cyw43-firmware/43439A0_btfw.bin");
+    // Sets up Bluetooth and Trouble
+    {
+        // Release:
+        #[cfg(not(debug_assertions))]
+        let fw = include_bytes!("../cyw43-firmware/43439A0.bin");
+        #[cfg(not(debug_assertions))]
+        let clm = include_bytes!("../cyw43-firmware/43439A0_clm.bin");
+        #[cfg(not(debug_assertions))]
+        let btfw = include_bytes!("../cyw43-firmware/43439A0_btfw.bin");
 
-    // Dev
-    #[cfg(debug_assertions)]
-    let fw = unsafe { core::slice::from_raw_parts(0x10100000 as *const u8, 224190) };
-    #[cfg(debug_assertions)]
-    let clm = unsafe { core::slice::from_raw_parts(0x10140000 as *const u8, 4752) };
-    #[cfg(debug_assertions)]
-    let btfw = unsafe { core::slice::from_raw_parts(0x10141400 as *const u8, 6164) };
+        // Dev
+        #[cfg(debug_assertions)]
+        let fw = unsafe { core::slice::from_raw_parts(0x10100000 as *const u8, 224190) };
+        #[cfg(debug_assertions)]
+        let clm = unsafe { core::slice::from_raw_parts(0x10140000 as *const u8, 4752) };
+        #[cfg(debug_assertions)]
+        let btfw = unsafe { core::slice::from_raw_parts(0x10141400 as *const u8, 6164) };
 
-    let pwr = Output::new(p.PIN_23, Level::Low);
-    let cs = Output::new(p.PIN_25, Level::High);
-    let mut pio = Pio::new(p.PIO0, Irqs);
-    let spi = PioSpi::new(
-        &mut pio.common,
-        pio.sm0,
-        cyw43_pio::DEFAULT_CLOCK_DIVIDER,
-        pio.irq0,
-        cs,
-        p.PIN_24,
-        p.PIN_29,
-        p.DMA_CH0,
-    );
+        let pwr = Output::new(p.PIN_23, Level::Low);
+        let cs = Output::new(p.PIN_25, Level::High);
+        let mut pio = Pio::new(p.PIO0, Irqs);
+        let spi = PioSpi::new(
+            &mut pio.common,
+            pio.sm0,
+            cyw43_pio::DEFAULT_CLOCK_DIVIDER,
+            pio.irq0,
+            cs,
+            p.PIN_24,
+            p.PIN_29,
+            p.DMA_CH0,
+        );
 
-    static STATE: StaticCell<cyw43::State> = StaticCell::new();
-    let state = STATE.init(cyw43::State::new());
-    let (_net_device, bt_device, mut control, runner) =
-        cyw43::new_with_bluetooth(state, pwr, spi, fw, btfw).await;
-    unwrap!(spawner.spawn(cyw43_task(runner)));
-    control.init(clm).await;
-    let controller: ble::ControllerT = ExternalController::new(bt_device);
+        static STATE: StaticCell<cyw43::State> = StaticCell::new();
+        let state = STATE.init(cyw43::State::new());
+        let (_net_device, bt_device, mut control, runner) =
+            cyw43::new_with_bluetooth(state, pwr, spi, fw, btfw).await;
+        unwrap!(spawner.spawn(cyw43_task(runner)));
+        control.init(clm).await;
+        let controller: ble::ControllerT = ExternalController::new(bt_device);
 
-    // Using a fixed "random" address can be useful for testing. In real scenarios, one would
-    // use e.g. the MAC 6 byte array as the address (how to get that varies by the platform).
-    let address: Address = Address::random([0xff, 0x8f, 0x1b, 0x05, 0xe4, 0xff]);
-    info!("Our address = {:?}", address);
+        // Using a fixed "random" address can be useful for testing. In real scenarios, one would
+        // use e.g. the MAC 6 byte array as the address (how to get that varies by the platform).
+        let address: Address = Address::random([0xff, 0x8f, 0x1b, 0x05, 0xe4, 0xff]);
+        info!("Our address = {:?}", address);
 
-    static RESOURCES: StaticCell<ble::Resources> = StaticCell::new();
-    let stack = trouble_host::new(controller, RESOURCES.init(HostResources::new()))
-        .set_random_address(address);
-    let Host {
-        central: _,
-        mut runner,
-        mut peripheral,
-        ..
-    } = stack.build();
+        static RESOURCES: StaticCell<ble::Resources> = StaticCell::new();
+        let stack = trouble_host::new(controller, RESOURCES.init(HostResources::new()))
+            .set_random_address(address);
+        let Host {
+            central: _,
+            mut runner,
+            mut peripheral,
+            ..
+        } = stack.build();
 
-    // select(
-    //     ble::ble_task(&mut runner),
-    //     ble::le_audio_periphery_test(&mut peripheral, &stack),
-    // )
-    // .await;
+        select(
+            ble::ble_task(&mut runner),
+            ble::le_audio_periphery_test(&mut peripheral, &stack),
+        )
+        .await;
+    }
 }
