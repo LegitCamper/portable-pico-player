@@ -72,4 +72,4 @@ embassy-time = { git = "https://github.com/embassy-rs/embassy.git", rev = "195b1
 embassy-embedded-hal = { git = "https://github.com/embassy-rs/embassy.git", rev = "195b1a593a4f51ebc7ae61b5045c620a1dbd25d8" }
 cyw43 = { git = "https://github.com/embassy-rs/embassy.git", rev = "195b1a593a4f51ebc7ae61b5045c620a1dbd25d8" }
 cyw43-pio = { git = "https://github.com/embassy-rs/embassy.git", rev = "195b1a593a4f51ebc7ae61b5045c620a1dbd25d8" }
-trouble-host = { git = "https://github.com/embassy-rs/trouble.git", rev = "e1940e89144096bc69b3c38745c3e13203135775" }
+trouble-host = { git = "https://github.com/embassy-rs/trouble.git", rev = "7700932050221fa68a274fe713f7d1eb3d477ea2" }

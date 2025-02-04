@@ -9,7 +9,7 @@ use trouble_host::prelude::{
 };
 
 /// Size of L2CAP packets
-const L2CAP_MTU: usize = 128;
+pub const L2CAP_MTU: usize = 128;
 
 /// Max number of connections
 const CONNECTIONS_MAX: usize = 1;
@@ -31,70 +31,8 @@ pub async fn ble_task(runner: &mut Runner<'_, ControllerT>) {
     }
 }
 
-// GATT Server definition
-#[gatt_server]
-struct Server {
-    pacs: trouble_audio::pacs::PacsSource,
-}
-
-pub async fn le_audio_periphery_test<'a>(
-    peripheral: &'a mut Peripheral<'a, ControllerT>,
-    stack: &'a Stack<'a, ControllerT>,
-) {
-    loop {
-        match advertise::<ControllerT>("Pico Speaker Test", peripheral).await {
-            Ok(conn) => {
-                let server = Server::new_with_config(GapConfig::Peripheral(PeripheralConfig {
-                    name: "Pico Speaker Test",
-                    appearance: &appearance::audio_sink::GENERIC_AUDIO_SINK,
-                }))
-                .unwrap();
-
-                let client = GattClient::<ControllerT, 10, L2CAP_MTU>::new(&stack, &conn)
-                    .await
-                    .unwrap();
-
-                select(
-                    client.task(),
-                    select(run_server(&server, &conn), run_client(&client)),
-                )
-                .await;
-            }
-            Err(e) => {
-                let e = defmt::Debug2Format(&e);
-                defmt::panic!("[adv] error: {:?}", e);
-            }
-        }
-    }
-}
-
-async fn run_client<'a>(client: &GattClient<'a, ControllerT, 10, L2CAP_MTU>) {
-    trouble_audio::pacs::sink_client(client).await
-}
-
-async fn run_server<'a>(server: &Server<'a>, conn: &Connection<'a>) {
-    loop {
-        match conn.next().await {
-            ConnectionEvent::Disconnected { reason } => {
-                info!("[gatt] disconnected: {:?}", reason);
-                break;
-            }
-            ConnectionEvent::Gatt { data } => match data.process(&server).await {
-                Ok(event) => {
-                    if let Some(data) = event {
-                        // trouble_audio::pacs::sink_server::<ControllerT, 10>(&server.pacs, &data);
-                    }
-                }
-                Err(e) => {
-                    warn!("[gatt] error processing event: {:?}", e);
-                }
-            },
-        }
-    }
-}
-
 /// Create an advertiser to use to connect to a BLE Central, and wait for it to connect.
-async fn advertise<'a, C>(
+pub async fn advertise<'a, C>(
     name: &'a str,
     peripheral: &mut Peripheral<'a, C>,
 ) -> Result<Connection<'a>, BleHostError<C::Error>>

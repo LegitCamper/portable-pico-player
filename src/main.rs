@@ -5,7 +5,7 @@ use bt_hci::controller::ExternalController;
 use cyw43_pio::PioSpi;
 use defmt::*;
 use embassy_executor::Spawner;
-use embassy_futures::select::select;
+use embassy_futures::{join::join, select::select};
 use embassy_rp::bind_interrupts;
 use embassy_rp::gpio::{Level, Output};
 use embassy_rp::i2c;
@@ -17,6 +17,8 @@ use embedded_sdmmc::sdcard::{DummyCsPin, SdCard};
 use static_cell::StaticCell;
 use trouble_host::{HostResources, prelude::*};
 use {defmt_rtt as _, embassy_time as _, panic_probe as _};
+
+use trouble_audio::{LeAudioServer, run_client, run_server};
 
 mod ble;
 mod display;
@@ -40,32 +42,32 @@ async fn main(spawner: Spawner) {
     embassy_rp::pac::SIO.spinlock(31).write_value(1);
     let p = embassy_rp::init(Default::default());
 
-    // Set up I2C0 for the SSD1306 OLED Display
-    let i2c0 = i2c::I2c::new_async(p.I2C0, p.PIN_1, p.PIN_0, Irqs, i2c::Config::default());
-    unwrap!(spawner.spawn(display_task(i2c0)));
+    // // Set up I2C0 for the SSD1306 OLED Display
+    // let i2c0 = i2c::I2c::new_async(p.I2C0, p.PIN_1, p.PIN_0, Irqs, i2c::Config::default());
+    // unwrap!(spawner.spawn(display_task(i2c0)));
 
-    // Set up SPI0 for the Micro SD reader
-    {
-        let mut config = spi::Config::default();
-        config.frequency = 400_000;
-        let spi = spi::Spi::new_blocking(p.SPI0, p.PIN_2, p.PIN_3, p.PIN_4, config);
-        // Use a dummy cs pin here, for embedded-hal SpiDevice compatibility reasons
-        let spi_dev = ExclusiveDevice::new_no_delay(spi, DummyCsPin);
-        // Real cs pin
-        let cs = Output::new(p.PIN_5, Level::High);
+    // // Set up SPI0 for the Micro SD reader
+    // {
+    //     let mut config = spi::Config::default();
+    //     config.frequency = 400_000;
+    //     let spi = spi::Spi::new_blocking(p.SPI0, p.PIN_2, p.PIN_3, p.PIN_4, config);
+    //     // Use a dummy cs pin here, for embedded-hal SpiDevice compatibility reasons
+    //     let spi_dev = ExclusiveDevice::new_no_delay(spi, DummyCsPin);
+    //     // Real cs pin
+    //     let cs = Output::new(p.PIN_5, Level::High);
 
-        let sdcard = SdCard::new(spi_dev, cs, embassy_time::Delay);
-        info!("Card size is {} bytes", sdcard.num_bytes().unwrap());
+    //     let sdcard = SdCard::new(spi_dev, cs, embassy_time::Delay);
+    //     info!("Card size is {} bytes", sdcard.num_bytes().unwrap());
 
-        // Now that the card is initialized, the SPI clock can go faster
-        let mut config = spi::Config::default();
-        config.frequency = 16_000_000;
-        sdcard.spi(|dev| dev.bus_mut().set_config(&config));
+    //     // Now that the card is initialized, the SPI clock can go faster
+    //     let mut config = spi::Config::default();
+    //     config.frequency = 16_000_000;
+    //     sdcard.spi(|dev| dev.bus_mut().set_config(&config));
 
-        // unwrap!(spawner.spawn(storage_task(sdcard)));
-        let mut sd = storage::Library::new(sdcard);
-        sd.list_files();
-    }
+    //     // unwrap!(spawner.spawn(storage_task(sdcard)));
+    //     let mut sd = storage::Library::new(sdcard);
+    //     sd.list_files();
+    // }
 
     // Sets up Bluetooth and Trouble
     {
@@ -122,10 +124,35 @@ async fn main(spawner: Spawner) {
             ..
         } = stack.build();
 
-        select(
-            ble::ble_task(&mut runner),
-            ble::le_audio_periphery_test(&mut peripheral, &stack),
-        )
+        select(ble::ble_task(&mut runner), async {
+            // wish this could be made after conn is made to save battery. Current saticcell impl means it panics on 2nd iter of loop
+            let server = LeAudioServer::new_with_config(GapConfig::Peripheral(PeripheralConfig {
+                name: "Pico Speaker Test",
+                appearance: &appearance::audio_sink::GENERIC_AUDIO_SINK,
+            }))
+            .unwrap();
+
+            loop {
+                match ble::advertise::<ble::ControllerT>("Pico Speaker Test", &mut peripheral).await
+                {
+                    Ok(conn) => {
+                        let client = GattClient::<ble::ControllerT, 10, { ble::L2CAP_MTU }>::new(
+                            &stack, &conn,
+                        )
+                        .await
+                        .unwrap();
+
+                        run_server(&server, &conn).await
+
+                        // select(run_server(&server, &conn), run_client(&client)).await;
+                    }
+                    Err(e) => {
+                        let e = defmt::Debug2Format(&e);
+                        defmt::panic!("[adv] error: {:?}", e);
+                    }
+                }
+            }
+        })
         .await;
     }
 }
