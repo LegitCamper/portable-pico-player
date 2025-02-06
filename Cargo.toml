@@ -25,7 +25,7 @@ embassy-rp = { version = "0.3.0", features = [
 embassy-futures = "0.1.1"
 embassy-embedded-hal = "0.3.0"
 embassy-sync = { version = "0.6", features = ["defmt"] }
-trouble-host = { version = "0.1", features = ["defmt", "derive", "scan"] }
+trouble-host = { version = "0.1", features = ["derive", "scan"] }
 
 futures = { version = "0.3", default-features = false, features = [
   "async-await",

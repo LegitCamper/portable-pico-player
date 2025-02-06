@@ -1,14 +1,25 @@
-use bt_hci::controller::ExternalController;
+use core::any::Any;
+
+use bt_hci::{controller::ExternalController, uuid::service};
 use cyw43::bluetooth::BtDriver;
 use defmt::*;
 use embassy_futures::select::select;
 use embassy_sync::blocking_mutex::raw::NoopRawMutex;
-use trouble_audio::run_server;
-use trouble_host::prelude::{
-    AdStructure, Advertisement, BR_EDR_NOT_SUPPORTED, BleHostError, Central, Connection,
-    ConnectionEvent, GapConfig, GattClient, HostResources, LE_GENERAL_DISCOVERABLE, Peripheral,
-    PeripheralConfig, Runner, Stack, Uuid, appearance, gatt_server,
+use embassy_time::Timer;
+use heapless::Vec;
+use trouble_audio::MAX_SERVICES;
+use trouble_host::{
+    gap::{GapConfig, PeripheralConfig},
+    prelude::{
+        AdStructure, Advertisement, AttributeServer, AttributeTable, BR_EDR_NOT_SUPPORTED,
+        BleHostError, Central, Connection, ConnectionEvent, HostResources, LE_GENERAL_DISCOVERABLE,
+        Peripheral, Runner, Service, Uuid, appearance, gatt_server,
+    },
 };
+
+// GATT Server definition
+#[gatt_server]
+struct Server {}
 
 /// Size of L2CAP packets
 pub const L2CAP_MTU: usize = 128;
@@ -38,20 +49,37 @@ pub async fn run(
     mut _central: Central<'_, ControllerT>,
     mut peripheral: Peripheral<'_, ControllerT>,
 ) {
-    let mut gatt_storage: [u8; L2CAP_MTU * 3] = [0; 384];
+    const STORAGE_SIZE: usize = L2CAP_MTU * MAX_SERVICES;
+    let mut gatt_storage: [u8; STORAGE_SIZE] = [0; STORAGE_SIZE];
+
     loop {
         select(ble_task(&mut runner), async {
             loop {
                 match advertise::<ControllerT>("Pico Speaker Test", &mut peripheral).await {
                     Ok(conn) => {
                         info!("[adv] connection established");
-                        run_server::<{ L2CAP_MTU }, NoopRawMutex>(
-                            &conn,
-                            "Pico Speaker Test",
-                            &appearance::audio_sink::GENERIC_AUDIO_SINK.to_le_bytes(),
-                            &mut gatt_storage,
-                        )
-                        .await;
+
+                        info!("[gatt] Creating server");
+                        let mut server =
+                            trouble_audio::ServerBuilder::<L2CAP_MTU, NoopRawMutex>::new(
+                                b"Pico Speaker Test",
+                                &appearance::audio_sink::GENERIC_AUDIO_SINK,
+                                gatt_storage.as_mut_slice(),
+                            );
+                        info!("adding pacs");
+                        server.add_pacs();
+                        info!("building");
+                        let server = server.build();
+
+                        loop {
+                            match conn.next().await {
+                                ConnectionEvent::Disconnected { reason } => {
+                                    info!("[gatt] disconnected: {:?}", reason);
+                                    break;
+                                }
+                                ConnectionEvent::Gatt { data } => server.process(data).await,
+                            }
+                        }
                     }
                     Err(e) => {
                         let e = defmt::Debug2Format(&e);
