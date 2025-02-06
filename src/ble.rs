@@ -2,10 +2,12 @@ use bt_hci::controller::ExternalController;
 use cyw43::bluetooth::BtDriver;
 use defmt::*;
 use embassy_futures::select::select;
+use embassy_sync::blocking_mutex::raw::NoopRawMutex;
+use trouble_audio::run_server;
 use trouble_host::prelude::{
-    AdStructure, Advertisement, BR_EDR_NOT_SUPPORTED, BleHostError, Connection, ConnectionEvent,
-    GapConfig, GattClient, HostResources, LE_GENERAL_DISCOVERABLE, Peripheral, PeripheralConfig,
-    Runner, Stack, Uuid, appearance, gatt_server,
+    AdStructure, Advertisement, BR_EDR_NOT_SUPPORTED, BleHostError, Central, Connection,
+    ConnectionEvent, GapConfig, GattClient, HostResources, LE_GENERAL_DISCOVERABLE, Peripheral,
+    PeripheralConfig, Runner, Stack, Uuid, appearance, gatt_server,
 };
 
 /// Size of L2CAP packets
@@ -26,8 +28,40 @@ pub async fn ble_task(runner: &mut Runner<'_, ControllerT>) {
     loop {
         if let Err(e) = runner.run().await {
             let e = defmt::Debug2Format(&e);
-            defmt::panic!("[ble_task] error: {:?}", e);
+            defmt::error!("[ble_task] error: {:?}", e);
         }
+    }
+}
+
+pub async fn run(
+    mut runner: &mut Runner<'_, ControllerT>,
+    mut _central: Central<'_, ControllerT>,
+    mut peripheral: Peripheral<'_, ControllerT>,
+) {
+    let mut gatt_storage: [u8; L2CAP_MTU * 3] = [0; 384];
+    loop {
+        select(ble_task(&mut runner), async {
+            loop {
+                match advertise::<ControllerT>("Pico Speaker Test", &mut peripheral).await {
+                    Ok(conn) => {
+                        info!("[adv] connection established");
+                        run_server::<{ L2CAP_MTU }, NoopRawMutex>(
+                            &conn,
+                            "Pico Speaker Test",
+                            &appearance::audio_sink::GENERIC_AUDIO_SINK.to_le_bytes(),
+                            &mut gatt_storage,
+                        )
+                        .await;
+                    }
+                    Err(e) => {
+                        let e = defmt::Debug2Format(&e);
+                        defmt::error!("[adv] error: {:?}", e);
+                    }
+                }
+            }
+        })
+        .await;
+        info!("Exiting Bluetooth");
     }
 }
 
@@ -39,7 +73,7 @@ pub async fn advertise<'a, C>(
 where
     C: trouble_host::prelude::Controller,
 {
-    let mut advertiser_data = [0; 31];
+    let mut advertiser_data = [0; 45];
     AdStructure::encode_slice(
         &[
             AdStructure::Flags(LE_GENERAL_DISCOVERABLE | BR_EDR_NOT_SUPPORTED),
@@ -62,6 +96,5 @@ where
         .await?;
     info!("[adv] advertising");
     let conn = advertiser.accept().await?;
-    info!("[adv] connection established");
     Ok(conn)
 }

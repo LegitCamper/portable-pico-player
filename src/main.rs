@@ -12,13 +12,13 @@ use embassy_rp::i2c;
 use embassy_rp::peripherals::{DMA_CH0, I2C0, PIO0};
 use embassy_rp::pio::{self, Pio};
 use embassy_rp::spi;
+use embassy_sync::blocking_mutex::raw::NoopRawMutex;
 use embedded_hal_bus::spi::ExclusiveDevice;
 use embedded_sdmmc::sdcard::{DummyCsPin, SdCard};
+use heapless::Vec;
 use static_cell::StaticCell;
 use trouble_host::{HostResources, prelude::*};
 use {defmt_rtt as _, embassy_time as _, panic_probe as _};
-
-use trouble_audio::{LeAudioServer, run_client, run_server};
 
 mod ble;
 mod display;
@@ -109,50 +109,17 @@ async fn main(spawner: Spawner) {
         control.init(clm).await;
         let controller: ble::ControllerT = ExternalController::new(bt_device);
 
-        // Using a fixed "random" address can be useful for testing. In real scenarios, one would
-        // use e.g. the MAC 6 byte array as the address (how to get that varies by the platform).
         let address: Address = Address::random([0xff, 0x8f, 0x1b, 0x05, 0xe4, 0xff]);
-        info!("Our address = {:?}", address);
-
         static RESOURCES: StaticCell<ble::Resources> = StaticCell::new();
         let stack = trouble_host::new(controller, RESOURCES.init(HostResources::new()))
             .set_random_address(address);
         let Host {
-            central: _,
+            central,
             mut runner,
-            mut peripheral,
+            peripheral,
             ..
         } = stack.build();
 
-        select(ble::ble_task(&mut runner), async {
-            // wish this could be made after conn is made to save battery. Current saticcell impl means it panics on 2nd iter of loop
-            let server = LeAudioServer::new_with_config(GapConfig::Peripheral(PeripheralConfig {
-                name: "Pico Speaker Test",
-                appearance: &appearance::audio_sink::GENERIC_AUDIO_SINK,
-            }))
-            .unwrap();
-
-            loop {
-                match ble::advertise::<ble::ControllerT>("Pico Speaker Test", &mut peripheral).await
-                {
-                    Ok(conn) => {
-                        let client = GattClient::<ble::ControllerT, 10, { ble::L2CAP_MTU }>::new(
-                            &stack, &conn,
-                        )
-                        .await
-                        .unwrap();
-
-                        run_server(&server, &conn).await
-
-                        // select(run_server(&server, &conn), run_client(&client)).await;
-                    }
-                    Err(e) => {
-                        let e = defmt::Debug2Format(&e);
-                        defmt::panic!("[adv] error: {:?}", e);
-                    }
-                }
-            }
-        })
-        .await;
+        ble::run(&mut runner, central, peripheral).await;
     }
 }
