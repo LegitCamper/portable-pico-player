@@ -7,7 +7,7 @@ use embassy_futures::select::select;
 use embassy_sync::blocking_mutex::raw::NoopRawMutex;
 use embassy_time::Timer;
 use heapless::Vec;
-use trouble_audio::MAX_SERVICES;
+use trouble_audio::{MAX_SERVICES, pacs};
 use trouble_host::{
     gap::{GapConfig, PeripheralConfig},
     prelude::{
@@ -17,18 +17,20 @@ use trouble_host::{
     },
 };
 
-// GATT Server definition
-#[gatt_server]
-struct Server {}
+/// Max number of connections
+const CONNECTIONS_MAX: usize = 1;
 
 /// Size of L2CAP packets
 pub const L2CAP_MTU: usize = 128;
 
-/// Max number of connections
-const CONNECTIONS_MAX: usize = 1;
-
 /// Max number of L2CAP channels.
 const L2CAP_CHANNELS_MAX: usize = 3; // Signal + att + CoC
+
+/// Max size of a gatt packet - minus headers
+const ATT_MTU: usize = L2CAP_MTU - 4 - 3;
+
+/// The size needed to store all le audio server data
+const STORAGE_SIZE: usize = ATT_MTU * MAX_SERVICES;
 
 const CONTROLLER_SLOTS: usize = 10;
 
@@ -48,8 +50,7 @@ pub async fn run(
     mut runner: &mut Runner<'_, ControllerT>,
     mut _central: Central<'_, ControllerT>,
     mut peripheral: Peripheral<'_, ControllerT>,
-) {
-    const STORAGE_SIZE: usize = L2CAP_MTU * MAX_SERVICES;
+) -> ! {
     let mut gatt_storage: [u8; STORAGE_SIZE] = [0; STORAGE_SIZE];
 
     loop {
@@ -58,19 +59,14 @@ pub async fn run(
                 match advertise::<ControllerT>("Pico Speaker Test", &mut peripheral).await {
                     Ok(conn) => {
                         info!("[adv] connection established");
-
-                        info!("[gatt] Creating server");
-                        let mut server =
-                            trouble_audio::ServerBuilder::<L2CAP_MTU, NoopRawMutex>::new(
+                        let mut server_builder =
+                            trouble_audio::ServerBuilder::<ATT_MTU, NoopRawMutex>::new(
                                 b"Pico Speaker Test",
                                 &appearance::audio_sink::GENERIC_AUDIO_SINK,
                                 gatt_storage.as_mut_slice(),
                             );
-                        info!("adding pacs");
-                        server.add_pacs();
-                        info!("building");
-                        let server = server.build();
-
+                        server_builder.add_pacs();
+                        let server = server_builder.build();
                         loop {
                             match conn.next().await {
                                 ConnectionEvent::Disconnected { reason } => {
