@@ -65,17 +65,17 @@ pub async fn run(
                                 &appearance::audio_sink::GENERIC_AUDIO_SINK,
                                 gatt_storage.as_mut_slice(),
                             );
-                        server_builder.add_pacs();
-                        let server = server_builder.build();
-                        loop {
-                            match conn.next().await {
-                                ConnectionEvent::Disconnected { reason } => {
-                                    info!("[gatt] disconnected: {:?}", reason);
-                                    break;
-                                }
-                                ConnectionEvent::Gatt { data } => server.process(data).await,
-                            }
-                        }
+                        // server_builder.add_pacs();
+                        // let server = server_builder.build();
+                        // loop {
+                        //     match conn.next().await {
+                        //         ConnectionEvent::Disconnected { reason } => {
+                        //             info!("[gatt] disconnected: {:?}", reason);
+                        //             break;
+                        //         }
+                        //         ConnectionEvent::Gatt { data } => server.process(data).await,
+                        //     }
+                        // }
                     }
                     Err(e) => {
                         let e = defmt::Debug2Format(&e);

@@ -21,7 +21,7 @@ use trouble_host::{HostResources, prelude::*};
 use {defmt_rtt as _, embassy_time as _, panic_probe as _};
 
 #[embassy_executor::task]
-pub async fn display_task(i2c0: embassy_rp::i2c::I2c<'static, I2C0, Async>) {
+pub async fn display_task(i2c0: i2c::I2c<'static, I2C0, Async>) {
     let interface = I2CDisplayInterface::new(i2c0);
     let display =
         Ssd1306::new(interface, DisplaySize128x32, DisplayRotation::Rotate0).into_terminal_mode();

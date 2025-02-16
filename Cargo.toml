@@ -48,9 +48,11 @@ panic-probe = { version = "0.3", features = ["print-defmt"] }
 static_cell = "2"
 portable-atomic = { version = "1.5", features = ["critical-section"] }
 heapless = "0.8.0"
+libm = "0.2.11"
 
 ssd1306 = "0.9.0"
 embedded-sdmmc = "0.7.0"
+ad5693x = { path = "../AD5693R" }
 
 # trouble_audio = { git = "https://github.com/LegitCamper/trouble_audio/" , features = ["defmt"]}
 trouble_audio = { path = "../trouble_audio/", features = ["defmt"] }
