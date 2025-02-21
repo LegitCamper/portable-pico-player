@@ -7,7 +7,10 @@ use embassy_futures::select::select;
 use embassy_sync::blocking_mutex::raw::NoopRawMutex;
 use embassy_time::Timer;
 use heapless::Vec;
-use trouble_audio::{MAX_SERVICES, pacs};
+use trouble_audio::{
+    MAX_SERVICES,
+    pacs::{self, AudioContexts},
+};
 use trouble_host::{
     gap::{GapConfig, PeripheralConfig},
     prelude::{
@@ -55,6 +58,9 @@ pub async fn run(
 
     loop {
         select(ble_task(&mut runner), async {
+            // Fake buffers for services
+            let (mut buf1, mut buf2): ([u8; ATT_MTU], [u8; ATT_MTU]) = ([0; ATT_MTU], [0; ATT_MTU]);
+
             loop {
                 match advertise::<ControllerT>("Pico Speaker Test", &mut peripheral).await {
                     Ok(conn) => {
@@ -65,17 +71,24 @@ pub async fn run(
                                 &appearance::audio_sink::GENERIC_AUDIO_SINK,
                                 gatt_storage.as_mut_slice(),
                             );
-                        // server_builder.add_pacs();
-                        // let server = server_builder.build();
-                        // loop {
-                        //     match conn.next().await {
-                        //         ConnectionEvent::Disconnected { reason } => {
-                        //             info!("[gatt] disconnected: {:?}", reason);
-                        //             break;
-                        //         }
-                        //         ConnectionEvent::Gatt { data } => server.process(data).await,
-                        //     }
-                        // }
+                        server_builder.add_pacs(
+                            None,
+                            None,
+                            None,
+                            None,
+                            (AudioContexts::default(), buf1.as_mut_slice()),
+                            (AudioContexts::default(), buf2.as_mut_slice()),
+                        );
+                        let server = server_builder.build();
+                        loop {
+                            match conn.next().await {
+                                ConnectionEvent::Disconnected { reason } => {
+                                    info!("[gatt] disconnected: {:?}", reason);
+                                    break;
+                                }
+                                ConnectionEvent::Gatt { data } => server.process(data).await,
+                            }
+                        }
                     }
                     Err(e) => {
                         let e = defmt::Debug2Format(&e);

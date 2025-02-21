@@ -1,6 +1,11 @@
 #![no_std]
 #![no_main]
 
+#[global_allocator]
+static ALLOCATOR: emballoc::Allocator<4096> = emballoc::Allocator::new();
+
+extern crate alloc;
+
 use bt_hci::controller::ExternalController;
 use core::f32::consts::PI;
 use cyw43_pio::PioSpi;
@@ -21,11 +26,11 @@ use embedded_sdmmc::sdcard::{DummyCsPin, SdCard};
 use heapless::Vec;
 use libm::sinf;
 use static_cell::StaticCell;
-use trouble_host::{HostResources, prelude::*};
+// use trouble_host::{HostResources, prelude::*};
 use {defmt_rtt as _, embassy_time as _, panic_probe as _};
 
 mod aux;
-mod ble;
+// mod ble;
 mod display;
 use display::display_task;
 mod storage;
@@ -51,10 +56,8 @@ async fn main(spawner: Spawner) {
     let i2c0 = i2c::I2c::new_async(p.I2C0, p.PIN_1, p.PIN_0, Irqs, i2c::Config::default());
     unwrap!(spawner.spawn(display_task(i2c0)));
 
-    unwrap!(spawner.spawn(aux::run(p.PWM_SLICE7, p.PIN_14)));
-
     // Set up SPI0 for the Micro SD reader
-    {
+    let library = {
         let mut config = spi::Config::default();
         config.frequency = 400_000;
         let spi = spi::Spi::new_blocking(p.SPI0, p.PIN_2, p.PIN_3, p.PIN_4, config);
@@ -72,9 +75,10 @@ async fn main(spawner: Spawner) {
         sdcard.spi(|dev| dev.bus_mut().set_config(&config));
 
         // unwrap!(spawner.spawn(storage_task(sdcard)));
-        let mut sd = storage::Library::new(sdcard);
-        sd.list_files();
-    }
+        storage::Library::new(sdcard)
+    };
+
+    unwrap!(spawner.spawn(aux::run(p.PWM_SLICE7, p.PIN_14, library)));
 
     // Sets up Bluetooth and Trouble
     // {
@@ -127,6 +131,6 @@ async fn main(spawner: Spawner) {
     //         ..
     //     } = stack.build();
 
-    //     // ble::run(&mut runner, central, peripheral).await;
+    //     ble::run(&mut runner, central, peripheral).await;
     // }
 }

@@ -5,7 +5,10 @@ use embassy_rp::spi::{self, Spi};
 use embassy_time::{Delay, Duration, Timer};
 use embedded_hal_bus::spi::{ExclusiveDevice, NoDelay};
 use embedded_sdmmc::sdcard::DummyCsPin;
-use embedded_sdmmc::{BlockDevice, DirEntry, Directory, SdCard, Volume, VolumeManager};
+use embedded_sdmmc::{
+    BlockDevice, DirEntry, Directory, File, RawFile, SdCard, Volume, VolumeManager,
+};
+use wavv::Wav;
 use {defmt_rtt as _, embassy_time as _, panic_probe as _};
 
 struct DummyTimesource();
@@ -26,22 +29,18 @@ impl embedded_sdmmc::TimeSource for DummyTimesource {
 const MAX_DIRS: usize = 10;
 const MAX_FILES: usize = 10;
 
-pub struct Library {
-    volume_mgr: VolumeManager<
-        SdCard<
-            ExclusiveDevice<
-                embassy_rp::spi::Spi<'static, SPI0, embassy_rp::spi::Blocking>,
-                DummyCsPin,
-                NoDelay,
-            >,
-            Output<'static>,
-            Delay,
-        >,
-        DummyTimesource,
-        4,
-        4,
-        1,
+type SD = SdCard<
+    ExclusiveDevice<
+        embassy_rp::spi::Spi<'static, SPI0, embassy_rp::spi::Blocking>,
+        DummyCsPin,
+        NoDelay,
     >,
+    Output<'static>,
+    Delay,
+>;
+
+pub struct Library {
+    volume_mgr: VolumeManager<SD, DummyTimesource, 4, 4, 1>,
 }
 
 impl Library {
@@ -67,6 +66,33 @@ impl Library {
         Self { volume_mgr }
     }
 
+    pub fn play_wav(&mut self, file: &str, action: impl Fn(&[u8])) {
+        let mut volume0 = self
+            .volume_mgr
+            .open_volume(embedded_sdmmc::VolumeIdx(0))
+            .unwrap();
+        // Open the root directory (mutably borrows from the volume).
+        let mut root = volume0.open_root_dir().unwrap();
+
+        let mut music = root.open_dir("music").unwrap();
+
+        let mut file = music
+            .open_file_in_dir(file, embedded_sdmmc::Mode::ReadOnly)
+            .unwrap();
+
+        let mut buf: [u8; 20] = [0; 20];
+        let read = file.read(&mut buf).unwrap();
+        // let wav = Wav::from_bytes(&buf[0..read]).unwrap();
+
+        // info!("wav: {:?}", wav.fmt.bit_depth);
+
+        while !file.is_eof() {
+            let mut buf: [u8; 20] = [0; 20];
+            let read = file.read(&mut buf).unwrap();
+            action(&buf[0..read])
+        }
+    }
+
     pub fn list_files(&mut self) {
         let mut volume0 = self
             .volume_mgr
@@ -83,25 +109,5 @@ impl Library {
         };
 
         root_dir.iterate_dir(prntr).unwrap();
-    }
-
-    pub fn print_test(&mut self) {
-        let mut volume0 = self
-            .volume_mgr
-            .open_volume(embedded_sdmmc::VolumeIdx(0))
-            .unwrap();
-        // Open the root directory (mutably borrows from the volume).
-        let mut root_dir = volume0.open_root_dir().unwrap();
-
-        let mut my_file = root_dir
-            .open_file_in_dir("MY_FILE.TXT", embedded_sdmmc::Mode::ReadOnly)
-            .unwrap();
-
-        while !my_file.is_eof() {
-            let mut buf = [0u8; 32];
-            if let Ok(n) = my_file.read(&mut buf) {
-                info!("{:a}", buf[..n]);
-            }
-        }
     }
 }

@@ -62,7 +62,7 @@ const MELODY: [(u32, u64); 14] = [
 ];
 
 #[embassy_executor::task]
-pub async fn run(slice7: PWM_SLICE7, pin14: PIN_14) {
+pub async fn run(slice7: PWM_SLICE7, pin14: PIN_14, mut library: super::storage::Library) {
     let c = pwm::Config::default();
     let clock_freq_hz = embassy_rp::clocks::clk_sys_freq();
     let desired_freq_hz = 25_000; // 25kHz base frequency for PWM
@@ -76,10 +76,16 @@ pub async fn run(slice7: PWM_SLICE7, pin14: PIN_14) {
     let mut pwm = Pwm::new_output_a(slice7, pin14, c.clone());
     pwm.set_duty_cycle_fully_off().unwrap();
 
+    // loop {
+    //     for &(freq, duration) in MELODY.iter() {
+    //         play_note(&mut pwm, freq, duration).await;
+    //     }
+    //     Timer::after_millis(500).await;
+    // }
+
+    library.list_files();
+
     loop {
-        for &(freq, duration) in MELODY.iter() {
-            play_note(&mut pwm, freq, duration).await;
-        }
-        Timer::after_millis(500).await;
+        library.play_wav("test.wav", |buf| {});
     }
 }
