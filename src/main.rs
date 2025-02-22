@@ -2,11 +2,6 @@
 #![no_main]
 #![feature(async_trait_bounds)]
 
-#[global_allocator]
-static ALLOCATOR: emballoc::Allocator<4096> = emballoc::Allocator::new();
-
-extern crate alloc;
-
 use bt_hci::controller::ExternalController;
 use core::f32::consts::PI;
 use cyw43_pio::PioSpi;

@@ -48,7 +48,6 @@ panic-probe = { version = "0.3", features = ["print-defmt"] }
 static_cell = "2"
 portable-atomic = { version = "1.5", features = ["critical-section"] }
 heapless = "0.8.0"
-emballoc = { version = "0.3.0", features = ["portable_atomic"] }
 libm = "0.2.11"
 
 ssd1306 = "0.9.0"

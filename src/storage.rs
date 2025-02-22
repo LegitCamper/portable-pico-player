@@ -8,6 +8,7 @@ use embedded_sdmmc::sdcard::DummyCsPin;
 use embedded_sdmmc::{
     BlockDevice, DirEntry, Directory, File, RawFile, SdCard, Volume, VolumeManager,
 };
+use heapless::Vec;
 use wavv::{Data, Wav};
 use {defmt_rtt as _, embassy_time as _, panic_probe as _};
 
@@ -81,15 +82,16 @@ impl Library {
 
         let mut music = root.open_dir("music").unwrap();
 
-        let mut file = music
+        let file = music
             .open_file_in_dir(file, embedded_sdmmc::Mode::ReadOnly)
             .unwrap();
 
         let mut wav = Wav::new(file).unwrap();
+        info!("Wav size: {}", wav.data.end);
         action(&mut wav).await;
     }
 
-    pub fn list_files(&mut self) {
+    pub fn list_files(&mut self) -> Vec<DirEntry, MAX_FILES> {
         let mut volume0 = self
             .volume_mgr
             .open_volume(embedded_sdmmc::VolumeIdx(0))
@@ -97,13 +99,11 @@ impl Library {
         // Open the root directory (mutably borrows from the volume).
         let mut root_dir = volume0.open_root_dir().unwrap();
 
-        let prntr = |dir: &DirEntry| {
-            info!(
-                "Dir: {}",
-                core::str::from_utf8(dir.name.base_name()).unwrap()
-            )
-        };
+        let mut files: Vec<DirEntry, MAX_FILES> = Vec::new();
+        root_dir
+            .iterate_dir(|file| files.push(file.clone()).unwrap())
+            .unwrap();
 
-        root_dir.iterate_dir(prntr).unwrap();
+        files
     }
 }

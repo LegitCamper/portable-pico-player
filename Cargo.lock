@@ -519,15 +519,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "60b1af1c220855b6ceac025d3f6ecdd2b7c4894bfe9cd9bda4fbb4bc7c0d4cf0"
 
 [[package]]
-name = "emballoc"
-version = "0.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5f1cdcc6ee777565b5b04209526974a213a8f97879bdb314572265db86e3c63f"
-dependencies = [
- "spin",
-]
-
-[[package]]
 name = "embassy-embedded-hal"
 version = "0.3.0"
 source = "git+https://github.com/embassy-rs/embassy.git?rev=195b1a593a4f51ebc7ae61b5045c620a1dbd25d8#195b1a593a4f51ebc7ae61b5045c620a1dbd25d8"
@@ -1779,7 +1770,6 @@ dependencies = [
  "cyw43-pio",
  "defmt",
  "defmt-rtt",
- "emballoc",
  "embassy-embedded-hal",
  "embassy-executor",
  "embassy-futures",
@@ -2350,7 +2340,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6980e8d7511241f8acf4aebddbb1ff938df5eebe98691418c4468d0b72a96a67"
 dependencies = [
  "lock_api",
- "portable-atomic",
 ]
 
 [[package]]
