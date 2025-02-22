@@ -1,3 +1,4 @@
+use crate::storage::{DummyTimesource, MAX_DIRS, MAX_FILES, MAX_VOLUMES, SD};
 use core::f32::consts::PI;
 use defmt::*;
 use embassy_rp::{
@@ -5,7 +6,6 @@ use embassy_rp::{
     pwm::{self, Config, Pwm, SetDutyCycle},
 };
 use embassy_time::{Duration, Timer};
-use libm::sinf;
 
 // Play a note with correct duty cycle
 pub async fn play_note<'a>(pwm: &mut Pwm<'a>, frequency: u32, duration_ms: u64) {
@@ -86,6 +86,19 @@ pub async fn run(slice7: PWM_SLICE7, pin14: PIN_14, mut library: super::storage:
     library.list_files();
 
     loop {
-        library.play_wav("test.wav", |buf| {});
+        library
+            .play_wav(
+                "test.wav",
+                async |buf: &mut wavv::Wav<
+                    SD,
+                    DummyTimesource,
+                    MAX_DIRS,
+                    MAX_FILES,
+                    MAX_VOLUMES,
+                >| {
+                    play_note(&mut pwm, 2, 2).await;
+                },
+            )
+            .await;
     }
 }

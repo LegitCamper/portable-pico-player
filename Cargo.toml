@@ -78,4 +78,5 @@ embassy-embedded-hal = { git = "https://github.com/embassy-rs/embassy.git", rev 
 cyw43 = { git = "https://github.com/embassy-rs/embassy.git", rev = "195b1a593a4f51ebc7ae61b5045c620a1dbd25d8" }
 cyw43-pio = { git = "https://github.com/embassy-rs/embassy.git", rev = "195b1a593a4f51ebc7ae61b5045c620a1dbd25d8" }
 trouble-host = { git = "https://github.com/embassy-rs/trouble.git", rev = "7700932050221fa68a274fe713f7d1eb3d477ea2" }
-wavv = { git = "https://github.com/samuelleeuwenburg/wavv", rev = "753a315d2434c9f4440e70c86054168ca0deee95" }
+# wavv = { git = "https://github.com/samuelleeuwenburg/wavv", rev = "753a315d2434c9f4440e70c86054168ca0deee95" }
+wavv = { path = "../wavv" }

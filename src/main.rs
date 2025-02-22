@@ -1,5 +1,6 @@
 #![no_std]
 #![no_main]
+#![feature(async_trait_bounds)]
 
 #[global_allocator]
 static ALLOCATOR: emballoc::Allocator<4096> = emballoc::Allocator::new();

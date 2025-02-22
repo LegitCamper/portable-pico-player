@@ -8,10 +8,10 @@ use embedded_sdmmc::sdcard::DummyCsPin;
 use embedded_sdmmc::{
     BlockDevice, DirEntry, Directory, File, RawFile, SdCard, Volume, VolumeManager,
 };
-use wavv::Wav;
+use wavv::{Data, Wav};
 use {defmt_rtt as _, embassy_time as _, panic_probe as _};
 
-struct DummyTimesource();
+pub struct DummyTimesource();
 
 impl embedded_sdmmc::TimeSource for DummyTimesource {
     fn get_timestamp(&self) -> embedded_sdmmc::Timestamp {
@@ -26,10 +26,11 @@ impl embedded_sdmmc::TimeSource for DummyTimesource {
     }
 }
 
-const MAX_DIRS: usize = 10;
-const MAX_FILES: usize = 10;
+pub const MAX_DIRS: usize = 4;
+pub const MAX_FILES: usize = 4;
+pub const MAX_VOLUMES: usize = 1;
 
-type SD = SdCard<
+pub type SD = SdCard<
     ExclusiveDevice<
         embassy_rp::spi::Spi<'static, SPI0, embassy_rp::spi::Blocking>,
         DummyCsPin,
@@ -40,7 +41,7 @@ type SD = SdCard<
 >;
 
 pub struct Library {
-    volume_mgr: VolumeManager<SD, DummyTimesource, 4, 4, 1>,
+    volume_mgr: VolumeManager<SD, DummyTimesource, MAX_DIRS, MAX_FILES, MAX_VOLUMES>,
 }
 
 impl Library {
@@ -66,7 +67,11 @@ impl Library {
         Self { volume_mgr }
     }
 
-    pub fn play_wav(&mut self, file: &str, action: impl Fn(&[u8])) {
+    pub async fn play_wav(
+        &mut self,
+        file: &str,
+        mut action: impl async FnMut(&mut Wav<SD, DummyTimesource, MAX_DIRS, MAX_FILES, MAX_VOLUMES>),
+    ) {
         let mut volume0 = self
             .volume_mgr
             .open_volume(embedded_sdmmc::VolumeIdx(0))
@@ -80,17 +85,8 @@ impl Library {
             .open_file_in_dir(file, embedded_sdmmc::Mode::ReadOnly)
             .unwrap();
 
-        let mut buf: [u8; 20] = [0; 20];
-        let read = file.read(&mut buf).unwrap();
-        // let wav = Wav::from_bytes(&buf[0..read]).unwrap();
-
-        // info!("wav: {:?}", wav.fmt.bit_depth);
-
-        while !file.is_eof() {
-            let mut buf: [u8; 20] = [0; 20];
-            let read = file.read(&mut buf).unwrap();
-            action(&buf[0..read])
-        }
+        let mut wav = Wav::new(file).unwrap();
+        action(&mut wav).await;
     }
 
     pub fn list_files(&mut self) {
