@@ -52,7 +52,7 @@ libm = "0.2.11"
 
 ssd1306 = "0.9.0"
 embedded-sdmmc = "0.7.0"
-ad5693x = { path = "../AD5693R" }
+mcp4725 = "0.4.2"
 wavv = "0.2.0"
 
 # trouble_audio = { git = "https://github.com/LegitCamper/trouble_audio/" , features = ["defmt"]}
@@ -78,4 +78,4 @@ cyw43 = { git = "https://github.com/embassy-rs/embassy.git", rev = "195b1a593a4f
 cyw43-pio = { git = "https://github.com/embassy-rs/embassy.git", rev = "195b1a593a4f51ebc7ae61b5045c620a1dbd25d8" }
 trouble-host = { git = "https://github.com/embassy-rs/trouble.git", rev = "7700932050221fa68a274fe713f7d1eb3d477ea2" }
 # wavv = { git = "https://github.com/samuelleeuwenburg/wavv", rev = "753a315d2434c9f4440e70c86054168ca0deee95" }
-wavv = { path = "../wavv" }
+wavv = { git = "https://github.com/LegitCamper/wavv" }

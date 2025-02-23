@@ -1,3 +1,5 @@
+use core::any::Any;
+
 use defmt::*;
 use embassy_rp::gpio::Output;
 use embassy_rp::peripherals::SPI0;
@@ -89,6 +91,8 @@ impl Library {
         let mut wav = Wav::new(file).unwrap();
         info!("Wav size: {}", wav.data.end);
         action(&mut wav).await;
+        let file = wav.destroy();
+        drop(file);
     }
 
     pub fn list_files(&mut self) -> Vec<DirEntry, MAX_FILES> {

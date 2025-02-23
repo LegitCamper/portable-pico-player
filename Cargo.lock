@@ -13,13 +13,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "ad5693x"
-version = "0.4.2"
-dependencies = [
- "embedded-hal 0.2.7",
-]
-
-[[package]]
 name = "addr2line"
 version = "0.24.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1511,6 +1504,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "mcp4725"
+version = "0.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "dce599a14397b8e47657106aefa6338cd2d287dd093291821ec29634a18d62b4"
+dependencies = [
+ "embedded-hal 0.2.7",
+]
+
+[[package]]
 name = "memchr"
 version = "2.7.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1762,7 +1764,6 @@ checksum = "5be167a7af36ee22fe3115051bc51f6e6c7054c9348e28deb4f49bd6f705a315"
 name = "pico-player"
 version = "0.1.0"
 dependencies = [
- "ad5693x",
  "bt-hci",
  "cortex-m",
  "cortex-m-rt",
@@ -1781,6 +1782,7 @@ dependencies = [
  "futures",
  "heapless 0.8.0",
  "libm",
+ "mcp4725",
  "panic-probe",
  "portable-atomic",
  "reqwest",
@@ -2877,6 +2879,7 @@ dependencies = [
 [[package]]
 name = "wavv"
 version = "0.2.0"
+source = "git+https://github.com/LegitCamper/wavv#30bf6c02722c6e64eaab755101275462994e57c8"
 dependencies = [
  "embedded-sdmmc",
  "heapless 0.8.0",

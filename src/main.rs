@@ -10,7 +10,7 @@ use embassy_executor::Spawner;
 use embassy_futures::{join::join, select::select};
 use embassy_rp::gpio::{Level, Output};
 use embassy_rp::i2c;
-use embassy_rp::peripherals::{DMA_CH0, I2C0, I2C1, PIN_14, PIO0, PWM_SLICE2, PWM_SLICE7};
+use embassy_rp::peripherals::{DMA_CH0, I2C0, I2C1, PIO0, PIO1};
 use embassy_rp::pio::{self, Pio};
 use embassy_rp::pwm::{Pwm, SetDutyCycle};
 use embassy_rp::spi;
@@ -34,6 +34,8 @@ mod storage;
 bind_interrupts!(struct Irqs {
     PIO0_IRQ_0 => pio::InterruptHandler<PIO0>;
     I2C0_IRQ => i2c::InterruptHandler<I2C0>;
+    PIO1_IRQ_0 => pio::InterruptHandler<PIO1>;
+    I2C1_IRQ => i2c::InterruptHandler<I2C1>;
 });
 
 #[embassy_executor::task]
@@ -55,7 +57,7 @@ async fn main(spawner: Spawner) {
     // Set up SPI0 for the Micro SD reader
     let library = {
         let mut config = spi::Config::default();
-        config.frequency = 400_000;
+        config.frequency = 1_00_000;
         let spi = spi::Spi::new_blocking(p.SPI0, p.PIN_2, p.PIN_3, p.PIN_4, config);
         // Use a dummy cs pin here, for embedded-hal SpiDevice compatibility reasons
         let spi_dev = ExclusiveDevice::new_no_delay(spi, DummyCsPin);
@@ -74,7 +76,12 @@ async fn main(spawner: Spawner) {
         storage::Library::new(sdcard)
     };
 
-    unwrap!(spawner.spawn(aux::run(p.PWM_SLICE7, p.PIN_14, library)));
+    // Set up I2C1 for the MCP4725 12-Bit DAC
+
+    let mut conf = i2c::Config::default();
+    conf.frequency = 1_000_000;
+    let i2c1 = i2c::I2c::new_async(p.I2C1, p.PIN_15, p.PIN_14, Irqs, conf);
+    unwrap!(spawner.spawn(aux::run(i2c1, library)));
 
     // Sets up Bluetooth and Trouble
     // {
