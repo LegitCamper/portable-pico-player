@@ -1,55 +1,33 @@
 use core::fmt::Write;
-use core::ops::BitAndAssign;
-
-use bt_hci::controller::ExternalController;
-use cyw43_pio::PioSpi;
-use defmt::*;
-use embassy_executor::Spawner;
-use embassy_futures::select::select;
-use embassy_rp::bind_interrupts;
-use embassy_rp::gpio::{Level, Output};
-use embassy_rp::i2c::{self, Async, Config};
-use embassy_rp::peripherals::{DMA_CH0, I2C0, I2C1, PIO0};
-use embassy_rp::pio::{self, Pio};
-use embassy_time::{Duration, Timer};
+use core::str::FromStr;
+use embassy_rp::peripherals::I2C0;
+use heapless::String;
+use ssd1306::Ssd1306;
 use ssd1306::mode::{DisplayConfig, TerminalMode};
-use ssd1306::prelude::{DisplayRotation, I2CInterface};
+use ssd1306::prelude::I2CInterface;
 use ssd1306::size::DisplaySize128x32;
-use ssd1306::{I2CDisplayInterface, Ssd1306};
-use static_cell::StaticCell;
-use trouble_host::{HostResources, prelude::*};
-use {defmt_rtt as _, embassy_time as _, panic_probe as _};
 
-#[embassy_executor::task]
-pub async fn display_task(i2c0: i2c::I2c<'static, I2C0, Async>) {
-    let interface = I2CDisplayInterface::new(i2c0);
-    let display =
-        Ssd1306::new(interface, DisplaySize128x32, DisplayRotation::Rotate0).into_terminal_mode();
+pub const SONG_NAME_LEN: usize = 20;
 
-    let mut ui = MediaUi::new(display, 50);
-
-    ui.draw();
-}
-
-struct MediaUi<'a> {
+pub struct MediaUi {
     display: Ssd1306<
-        I2CInterface<embassy_rp::i2c::I2c<'a, I2C0, embassy_rp::i2c::Async>>,
+        I2CInterface<embassy_rp::i2c::I2c<'static, I2C0, embassy_rp::i2c::Async>>,
         DisplaySize128x32,
         TerminalMode,
     >,
-    paused: bool,
-    song: &'a str,
-    volume: u8,
+    pub paused: bool,
+    pub song: String<SONG_NAME_LEN>,
+    pub volume: u8,
 }
 
-impl<'a> MediaUi<'a> {
+impl MediaUi {
     const VOLUME: u8 = 0;
     const SONG: u8 = 2;
     const MEDIA_CONTROLS: u8 = 3;
 
-    fn new(
+    pub fn new(
         mut display: Ssd1306<
-            I2CInterface<embassy_rp::i2c::I2c<'a, I2C0, embassy_rp::i2c::Async>>,
+            I2CInterface<embassy_rp::i2c::I2c<'static, I2C0, embassy_rp::i2c::Async>>,
             DisplaySize128x32,
             TerminalMode,
         >,
@@ -61,19 +39,19 @@ impl<'a> MediaUi<'a> {
         Self {
             display,
             paused: true,
-            song: "Not Playing",
+            song: String::from_str("Not Playing").unwrap(),
             volume,
         }
     }
 
-    pub fn center_str(&self, text: &str) -> u8 {
+    fn center_str(&self, text: &str) -> u8 {
         let (width, _height) = self.display.dimensions();
         let width = width / 8;
 
         (width - text.len() as u8) / 2
     }
 
-    pub fn center_int(&self, num: u8) -> u8 {
+    fn center_int(&self, num: u8) -> u8 {
         let (width, _height) = self.display.dimensions();
         let width = width / 8;
 
@@ -86,14 +64,14 @@ impl<'a> MediaUi<'a> {
         }
     }
 
-    pub fn center_width(&self, item_width: u8) -> u8 {
+    fn center_width(&self, item_width: u8) -> u8 {
         let (width, _height) = self.display.dimensions();
         let width = width / 8;
 
         (width - item_width) / 2
     }
 
-    fn draw(&mut self) {
+    pub fn draw(&mut self) {
         self.display
             .set_position(self.center_int(self.volume), Self::VOLUME)
             .unwrap();

@@ -2,34 +2,39 @@
 #![no_main]
 #![feature(async_trait_bounds)]
 
-use bt_hci::controller::ExternalController;
-use core::f32::consts::PI;
+// use bt_hci::controller::ExternalController;
 use cyw43_pio::PioSpi;
 use defmt::*;
-use embassy_executor::Spawner;
-use embassy_futures::{join::join, select::select};
+use display::MediaUi;
+use embassy_executor::Executor;
+use embassy_rp::bind_interrupts;
 use embassy_rp::gpio::{Level, Output};
 use embassy_rp::i2c;
 use embassy_rp::peripherals::{DMA_CH0, I2C0, I2C1, PIO0, PIO1};
-use embassy_rp::pio::{self, Pio};
-use embassy_rp::pwm::{Pwm, SetDutyCycle};
+use embassy_rp::pio;
 use embassy_rp::spi;
-use embassy_rp::{bind_interrupts, pwm};
-use embassy_sync::blocking_mutex::raw::NoopRawMutex;
-use embassy_time::Timer;
+use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
+use embassy_sync::channel::Channel;
 use embedded_hal_bus::spi::ExclusiveDevice;
 use embedded_sdmmc::sdcard::{DummyCsPin, SdCard};
-use heapless::Vec;
-use libm::sinf;
+use mcp4725::{MCP4725, PowerDown};
+use ssd1306::prelude::DisplayRotation;
+use ssd1306::size::DisplaySize128x32;
+use ssd1306::{I2CDisplayInterface, Ssd1306};
 use static_cell::StaticCell;
+use storage::Library;
+use wavv::DataBulk;
 // use trouble_host::{HostResources, prelude::*};
-use {defmt_rtt as _, embassy_time as _, panic_probe as _};
+use embassy_rp::multicore::{Stack, spawn_core1};
+use {defmt_rtt as _, panic_probe as _};
 
-mod aux;
 // mod ble;
 mod display;
-use display::display_task;
 mod storage;
+
+static mut CORE1_STACK: Stack<4096> = Stack::new();
+static EXECUTOR0: StaticCell<Executor> = StaticCell::new();
+static EXECUTOR1: StaticCell<Executor> = StaticCell::new();
 
 bind_interrupts!(struct Irqs {
     PIO0_IRQ_0 => pio::InterruptHandler<PIO0>;
@@ -45,14 +50,9 @@ async fn cyw43_task(
     runner.run().await
 }
 
-#[embassy_executor::main]
-async fn main(spawner: Spawner) {
-    embassy_rp::pac::SIO.spinlock(31).write_value(1);
+#[cortex_m_rt::entry]
+fn main() -> ! {
     let p = embassy_rp::init(Default::default());
-
-    // Set up I2C0 for the SSD1306 OLED Display
-    let i2c0 = i2c::I2c::new_async(p.I2C0, p.PIN_1, p.PIN_0, Irqs, i2c::Config::default());
-    unwrap!(spawner.spawn(display_task(i2c0)));
 
     // Set up SPI0 for the Micro SD reader
     let library = {
@@ -76,12 +76,34 @@ async fn main(spawner: Spawner) {
         storage::Library::new(sdcard)
     };
 
-    // Set up I2C1 for the MCP4725 12-Bit DAC
+    // spawning compute task
+    spawn_core1(
+        p.CORE1,
+        unsafe { &mut *core::ptr::addr_of_mut!(CORE1_STACK) },
+        move || {
+            let executor1 = EXECUTOR1.init(Executor::new());
+            executor1.run(|spawner| unwrap!(spawner.spawn(core1_task(library))));
+        },
+    );
 
+    // Set up I2C0 for the SSD1306 OLED Display
+    let display = {
+        let i2c0 = i2c::I2c::new_async(p.I2C0, p.PIN_1, p.PIN_0, Irqs, i2c::Config::default());
+        let interface = I2CDisplayInterface::new(i2c0);
+        let display = Ssd1306::new(interface, DisplaySize128x32, DisplayRotation::Rotate0)
+            .into_terminal_mode();
+        MediaUi::new(display, 50)
+    };
+
+    // Set up I2C1 for the MCP4725 12-Bit DAC
     let mut conf = i2c::Config::default();
     conf.frequency = 1_000_000;
     let i2c1 = i2c::I2c::new_async(p.I2C1, p.PIN_15, p.PIN_14, Irqs, conf);
-    unwrap!(spawner.spawn(aux::run(i2c1, library)));
+    let dac = MCP4725::new(i2c1, 0b010);
+
+    // Spawn main core task
+    let executor0 = EXECUTOR0.init(Executor::new());
+    executor0.run(|spawner| unwrap!(spawner.spawn(core0_task(display, dac))));
 
     // Sets up Bluetooth and Trouble
     // {
@@ -136,4 +158,32 @@ async fn main(spawner: Spawner) {
 
     //     ble::run(&mut runner, central, peripheral).await;
     // }
+}
+
+static CHANNEL: Channel<CriticalSectionRawMutex, wavv::DataBulk<10>, 5> = Channel::new();
+
+// Ui and media playback
+#[embassy_executor::task]
+async fn core0_task(mut display: MediaUi, mut dac: MCP4725<i2c::I2c<'static, I2C1, i2c::Async>>) {
+    display.draw();
+
+    info!("playing music");
+    loop {
+        let samples = CHANNEL.receive().await;
+
+        if let DataBulk::BitDepth8(samples) = samples {
+            for sample in samples {
+                dac.set_dac_fast(PowerDown::Normal, sample.into()).ok();
+            }
+        }
+    }
+}
+
+// File system & Decoding
+#[embassy_executor::task]
+async fn core1_task(mut library: Library) {
+    info!("reading test file");
+    loop {
+        library.read_wav("test.wav").await;
+    }
 }

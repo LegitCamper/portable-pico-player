@@ -1,5 +1,3 @@
-use core::any::Any;
-
 use bt_hci::{controller::ExternalController, uuid::service};
 use cyw43::bluetooth::BtDriver;
 use defmt::*;

@@ -1,18 +1,13 @@
-use core::any::Any;
-
 use defmt::*;
 use embassy_rp::gpio::Output;
 use embassy_rp::peripherals::SPI0;
 use embassy_rp::spi::{self, Spi};
-use embassy_time::{Delay, Duration, Timer};
+use embassy_time::Delay;
 use embedded_hal_bus::spi::{ExclusiveDevice, NoDelay};
 use embedded_sdmmc::sdcard::DummyCsPin;
-use embedded_sdmmc::{
-    BlockDevice, DirEntry, Directory, File, RawFile, SdCard, Volume, VolumeManager,
-};
+use embedded_sdmmc::{DirEntry, SdCard, VolumeManager};
 use heapless::Vec;
-use wavv::{Data, Wav};
-use {defmt_rtt as _, embassy_time as _, panic_probe as _};
+use wavv::Wav;
 
 pub struct DummyTimesource();
 
@@ -55,26 +50,12 @@ impl Library {
             Delay,
         >,
     ) -> Self {
-        // Now let's look for volumes (also known as partitions) on our block device.
-        // To do this we need a Volume Manager. It will take ownership of the block device.
-        let mut volume_mgr = embedded_sdmmc::VolumeManager::new(sdcard, DummyTimesource());
-
-        // Try and access Volume 0 (i.e. the first partition).
-        // The volume object holds information about the filesystem on that volume.
-        let volume0 = volume_mgr
-            .open_volume(embedded_sdmmc::VolumeIdx(0))
-            .unwrap();
-        info!("Volume 0: {:?}", defmt::Debug2Format(&volume0));
-        drop(volume0);
-
-        Self { volume_mgr }
+        Self {
+            volume_mgr: VolumeManager::new(sdcard, DummyTimesource()),
+        }
     }
 
-    pub async fn play_wav(
-        &mut self,
-        file: &str,
-        mut action: impl async FnMut(&mut Wav<SD, DummyTimesource, MAX_DIRS, MAX_FILES, MAX_VOLUMES>),
-    ) {
+    pub async fn read_wav(&mut self, file: &str) {
         let mut volume0 = self
             .volume_mgr
             .open_volume(embedded_sdmmc::VolumeIdx(0))
@@ -89,8 +70,12 @@ impl Library {
             .unwrap();
 
         let mut wav = Wav::new(file).unwrap();
-        info!("Wav size: {}", wav.data.end);
-        action(&mut wav).await;
+        info!("[Library] Wav size: {}", wav.data.end);
+
+        while !wav.is_end() {
+            super::CHANNEL.send(wav.next_n::<10>().unwrap()).await;
+        }
+
         let file = wav.destroy();
         drop(file);
     }
