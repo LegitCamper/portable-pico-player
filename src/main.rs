@@ -45,13 +45,6 @@ bind_interrupts!(struct Irqs {
     I2C1_IRQ => i2c::InterruptHandler<I2C1>;
 });
 
-// #[embassy_executor::task]
-// async fn cyw43_task(
-//     runner: cyw43::Runner<'static, Output<'static>, PioSpi<'static, PIO0, 0, DMA_CH0>>,
-// ) -> ! {
-//     runner.run().await
-// }
-
 #[cortex_m_rt::entry]
 fn main() -> ! {
     let p = embassy_rp::init(Default::default());
@@ -104,58 +97,62 @@ fn main() -> ! {
     executor0.run(|spawner| unwrap!(spawner.spawn(core0_task(display, dac))));
 
     // Sets up Bluetooth and Trouble
-    // {
-    //     // Release:
-    //     #[cfg(not(debug_assertions))]
-    //     let fw = include_bytes!("../cyw43-firmware/43439A0.bin");
-    //     #[cfg(not(debug_assertions))]
-    //     let clm = include_bytes!("../cyw43-firmware/43439A0_clm.bin");
-    //     #[cfg(not(debug_assertions))]
-    //     let btfw = include_bytes!("../cyw43-firmware/43439A0_btfw.bin");
+    {
+        // Release:
+        #[cfg(not(debug_assertions))]
+        let (fw, clm, btfw) = (
+            include_bytes!("../cyw43-firmware/43439A0.bin"),
+            include_bytes!("../cyw43-firmware/43439A0_clm.bin"),
+            include_bytes!("../cyw43-firmware/43439A0_btfw.bin"),
+        );
 
-    //     // Dev
-    //     #[cfg(debug_assertions)]
-    //     let fw = unsafe { core::slice::from_raw_parts(0x10100000 as *const u8, 224190) };
-    //     #[cfg(debug_assertions)]
-    //     let clm = unsafe { core::slice::from_raw_parts(0x10140000 as *const u8, 4752) };
-    //     #[cfg(debug_assertions)]
-    //     let btfw = unsafe { core::slice::from_raw_parts(0x10141400 as *const u8, 6164) };
+        // Dev
+        #[cfg(debug_assertions)]
+        let (fw, clm, btfw) = (
+            unsafe { core::slice::from_raw_parts(0x10100000 as *const u8, 224190) },
+            unsafe { core::slice::from_raw_parts(0x10140000 as *const u8, 4752) },
+            unsafe { core::slice::from_raw_parts(0x10141400 as *const u8, 6164) },
+        );
 
-    //     let pwr = Output::new(p.PIN_23, Level::Low);
-    //     let cs = Output::new(p.PIN_25, Level::High);
-    //     let mut pio = Pio::new(p.PIO0, Irqs);
-    //     let spi = PioSpi::new(
-    //         &mut pio.common,
-    //         pio.sm0,
-    //         cyw43_pio::DEFAULT_CLOCK_DIVIDER,
-    //         pio.irq0,
-    //         cs,
-    //         p.PIN_24,
-    //         p.PIN_29,
-    //         p.DMA_CH0,
-    //     );
+        let pwr = Output::new(p.PIN_23, Level::Low);
+        let cs = Output::new(p.PIN_25, Level::High);
+        let mut pio = Pio::new(p.PIO0, Irqs);
+        let spi = PioSpi::new(
+            &mut pio.common,
+            pio.sm0,
+            cyw43_pio::DEFAULT_CLOCK_DIVIDER,
+            pio.irq0,
+            cs,
+            p.PIN_24,
+            p.PIN_29,
+            p.DMA_CH0,
+        );
 
-    //     static STATE: StaticCell<cyw43::State> = StaticCell::new();
-    //     let state = STATE.init(cyw43::State::new());
-    //     let (_net_device, bt_device, mut control, runner) =
-    //         cyw43::new_with_bluetooth(state, pwr, spi, fw, btfw).await;
-    //     unwrap!(spawner.spawn(cyw43_task(runner)));
-    //     control.init(clm).await;
-    //     let controller: ble::ControllerT = ExternalController::new(bt_device);
+        static STATE: StaticCell<cyw43::State> = StaticCell::new();
+        let state = STATE.init(cyw43::State::new());
+        let (_net_device, bt_device, mut control, runner) =
+            cyw43::new_with_bluetooth(state, pwr, spi, fw, btfw).await;
+        unwrap!(spawner.spawn(cyw43_task(runner)));
+        control.init(clm).await;
+        let controller: ble::ControllerT = ExternalController::new(bt_device);
 
-    //     let address: Address = Address::random([0xff, 0x8f, 0x1b, 0x05, 0xe4, 0xff]);
-    //     static RESOURCES: StaticCell<ble::Resources> = StaticCell::new();
-    //     let stack = trouble_host::new(controller, RESOURCES.init(HostResources::new()))
-    //         .set_random_address(address);
-    //     let Host {
-    //         central,
-    //         mut runner,
-    //         peripheral,
-    //         ..
-    //     } = stack.build();
+        let address: Address = Address::random([0xff, 0x8f, 0x1b, 0x05, 0xe4, 0xff]);
+        static RESOURCES: StaticCell<ble::Resources> = StaticCell::new();
+        let stack = trouble_host::new(controller, RESOURCES.init(HostResources::new()))
+            .set_random_address(address);
+        let Host {
+            central,
+            mut runner,
+            peripheral,
+            ..
+        } = stack.build();
 
-    //     ble::run(&mut runner, central, peripheral).await;
-    // }
+        select(
+            runner.run(),
+            ble::run(&mut runner, central, peripheral).await,
+        )
+        .await;
+    }
 }
 
 const DATASIZE: usize = 10;
@@ -177,11 +174,11 @@ async fn core0_task(
 
     info!("playing music");
     loop {
-        let samples = CHANNEL.receive().await;
-
-        if let DataBulk::BitDepth8(samples) = samples {
-            for sample in samples {
-                dac.set_dac_fast(PowerDown::Normal, sample.into()).ok();
+        if let Ok(samples) = CHANNEL.try_receive() {
+            if let DataBulk::BitDepth8(samples) = samples {
+                for sample in samples {
+                    dac.set_dac_fast(PowerDown::Normal, sample.into()).ok();
+                }
             }
         }
     }
@@ -203,7 +200,8 @@ async fn core1_task(
         library
             .read_wav("test.wav", async |mut wav| {
                 while !wav.is_end() {
-                    CHANNEL.send(wav.next_n::<DATASIZE>().unwrap()).await;
+                    let samples = wav.next_n::<DATASIZE>().unwrap();
+                    CHANNEL.send(samples).await;
                 }
             })
             .await;
