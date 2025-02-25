@@ -10,15 +10,17 @@ use embassy_executor::Executor;
 use embassy_rp::bind_interrupts;
 use embassy_rp::gpio::{Level, Output};
 use embassy_rp::i2c;
-use embassy_rp::peripherals::{DMA_CH0, I2C0, I2C1, PIO0, PIO1};
+use embassy_rp::peripherals::{DMA_CH0, I2C0, I2C1, PIO0, PIO1, SPI0};
 use embassy_rp::pio;
 use embassy_rp::spi;
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::channel::Channel;
-use embedded_hal_bus::spi::ExclusiveDevice;
+use embassy_time::Timer;
+use embedded_hal_bus::spi::{ExclusiveDevice, NoDelay};
 use embedded_sdmmc::sdcard::{DummyCsPin, SdCard};
+use heapless::Vec;
 use mcp4725::{MCP4725, PowerDown};
-use ssd1306::prelude::DisplayRotation;
+use ssd1306::prelude::{DisplayRotation, I2CInterface};
 use ssd1306::size::DisplaySize128x32;
 use ssd1306::{I2CDisplayInterface, Ssd1306};
 use static_cell::StaticCell;
@@ -43,19 +45,19 @@ bind_interrupts!(struct Irqs {
     I2C1_IRQ => i2c::InterruptHandler<I2C1>;
 });
 
-#[embassy_executor::task]
-async fn cyw43_task(
-    runner: cyw43::Runner<'static, Output<'static>, PioSpi<'static, PIO0, 0, DMA_CH0>>,
-) -> ! {
-    runner.run().await
-}
+// #[embassy_executor::task]
+// async fn cyw43_task(
+//     runner: cyw43::Runner<'static, Output<'static>, PioSpi<'static, PIO0, 0, DMA_CH0>>,
+// ) -> ! {
+//     runner.run().await
+// }
 
 #[cortex_m_rt::entry]
 fn main() -> ! {
     let p = embassy_rp::init(Default::default());
 
     // Set up SPI0 for the Micro SD reader
-    let library = {
+    let sdcard = {
         let mut config = spi::Config::default();
         config.frequency = 1_00_000;
         let spi = spi::Spi::new_blocking(p.SPI0, p.PIN_2, p.PIN_3, p.PIN_4, config);
@@ -71,9 +73,7 @@ fn main() -> ! {
         let mut config = spi::Config::default();
         config.frequency = 16_000_000;
         sdcard.spi(|dev| dev.bus_mut().set_config(&config));
-
-        // unwrap!(spawner.spawn(storage_task(sdcard)));
-        storage::Library::new(sdcard)
+        sdcard
     };
 
     // spawning compute task
@@ -82,7 +82,7 @@ fn main() -> ! {
         unsafe { &mut *core::ptr::addr_of_mut!(CORE1_STACK) },
         move || {
             let executor1 = EXECUTOR1.init(Executor::new());
-            executor1.run(|spawner| unwrap!(spawner.spawn(core1_task(library))));
+            executor1.run(|spawner| unwrap!(spawner.spawn(core1_task(sdcard))));
         },
     );
 
@@ -90,9 +90,7 @@ fn main() -> ! {
     let display = {
         let i2c0 = i2c::I2c::new_async(p.I2C0, p.PIN_1, p.PIN_0, Irqs, i2c::Config::default());
         let interface = I2CDisplayInterface::new(i2c0);
-        let display = Ssd1306::new(interface, DisplaySize128x32, DisplayRotation::Rotate0)
-            .into_terminal_mode();
-        MediaUi::new(display, 50)
+        Ssd1306::new(interface, DisplaySize128x32, DisplayRotation::Rotate0).into_terminal_mode()
     };
 
     // Set up I2C1 for the MCP4725 12-Bit DAC
@@ -160,12 +158,22 @@ fn main() -> ! {
     // }
 }
 
-static CHANNEL: Channel<CriticalSectionRawMutex, wavv::DataBulk<10>, 5> = Channel::new();
+const DATASIZE: usize = 10;
+static CHANNEL: Channel<CriticalSectionRawMutex, wavv::DataBulk<DATASIZE>, 5> = Channel::new();
 
 // Ui and media playback
 #[embassy_executor::task]
-async fn core0_task(mut display: MediaUi, mut dac: MCP4725<i2c::I2c<'static, I2C1, i2c::Async>>) {
-    display.draw();
+async fn core0_task(
+    display: Ssd1306<
+        I2CInterface<i2c::I2c<'static, I2C0, i2c::Async>>,
+        DisplaySize128x32,
+        ssd1306::mode::TerminalMode,
+    >,
+    mut dac: MCP4725<i2c::I2c<'static, I2C1, i2c::Async>>,
+) {
+    info!("hello from core 0");
+    let mut media_ui = MediaUi::new(display, 25);
+    media_ui.draw();
 
     info!("playing music");
     loop {
@@ -181,9 +189,31 @@ async fn core0_task(mut display: MediaUi, mut dac: MCP4725<i2c::I2c<'static, I2C
 
 // File system & Decoding
 #[embassy_executor::task]
-async fn core1_task(mut library: Library) {
+async fn core1_task(
+    sdcard: SdCard<
+        ExclusiveDevice<spi::Spi<'static, SPI0, spi::Blocking>, DummyCsPin, NoDelay>,
+        Output<'static>,
+        embassy_time::Delay,
+    >,
+) {
+    info!("hello from core 1");
+    let mut library = storage::Library::new(sdcard);
     info!("reading test file");
     loop {
-        library.read_wav("test.wav").await;
+        library
+            .read_wav("test.wav", async |mut wav| {
+                while !wav.is_end() {
+                    CHANNEL.send(wav.next_n::<DATASIZE>().unwrap()).await;
+                }
+            })
+            .await;
     }
+
+    // loop {
+    //     CHANNEL
+    //         .send(DataBulk::BitDepth8(
+    //             Vec::from_slice(&[200, 20, 200, 20, 200]).unwrap(),
+    //         ))
+    //         .await;
+    // }
 }

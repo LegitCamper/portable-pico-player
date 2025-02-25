@@ -9,6 +9,8 @@ use embedded_sdmmc::{DirEntry, SdCard, VolumeManager};
 use heapless::Vec;
 use wavv::Wav;
 
+use crate::{CHANNEL, DATASIZE};
+
 pub struct DummyTimesource();
 
 impl embedded_sdmmc::TimeSource for DummyTimesource {
@@ -55,7 +57,11 @@ impl Library {
         }
     }
 
-    pub async fn read_wav(&mut self, file: &str) {
+    pub async fn read_wav(
+        &mut self,
+        file: &str,
+        mut action: impl async FnMut(Wav<SD, DummyTimesource, MAX_DIRS, MAX_FILES, MAX_VOLUMES>),
+    ) {
         let mut volume0 = self
             .volume_mgr
             .open_volume(embedded_sdmmc::VolumeIdx(0))
@@ -69,15 +75,9 @@ impl Library {
             .open_file_in_dir(file, embedded_sdmmc::Mode::ReadOnly)
             .unwrap();
 
-        let mut wav = Wav::new(file).unwrap();
+        let wav = Wav::new(file).unwrap();
         info!("[Library] Wav size: {}", wav.data.end);
-
-        while !wav.is_end() {
-            super::CHANNEL.send(wav.next_n::<10>().unwrap()).await;
-        }
-
-        let file = wav.destroy();
-        drop(file);
+        action(wav);
     }
 
     pub fn list_files(&mut self) -> Vec<DirEntry, MAX_FILES> {
