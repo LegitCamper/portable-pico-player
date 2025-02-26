@@ -54,7 +54,9 @@ embedded-sdmmc = "0.7.0"
 mcp4725 = "0.4.2"
 wavv = "0.2.0"
 
-# trouble_audio = { git = "https://github.com/LegitCamper/trouble_audio/" , features = ["defmt"]}
+trouble_audio = { git = "https://github.com/LegitCamper/trouble_audio/", features = [
+  "defmt",
+], optional = true }
 # trouble_audio = { path = "../trouble_audio/", features = ["defmt"] }
 
 [build-dependencies]
@@ -62,6 +64,7 @@ reqwest = { version = "0.12.9", features = ["blocking"] }
 
 [features]
 skip-cyw43-firmware = []
+bluetooth = ["dep:trouble_audio"]
 
 [profile.release]
 debug = 2
@@ -76,5 +79,6 @@ embassy-embedded-hal = { git = "https://github.com/embassy-rs/embassy.git", rev 
 cyw43 = { git = "https://github.com/embassy-rs/embassy.git", rev = "195b1a593a4f51ebc7ae61b5045c620a1dbd25d8" }
 cyw43-pio = { git = "https://github.com/embassy-rs/embassy.git", rev = "195b1a593a4f51ebc7ae61b5045c620a1dbd25d8" }
 trouble-host = { git = "https://github.com/embassy-rs/trouble.git", rev = "7700932050221fa68a274fe713f7d1eb3d477ea2" }
-# wavv = { git = "https://github.com/samuelleeuwenburg/wavv", rev = "753a315d2434c9f4440e70c86054168ca0deee95" }
+# embedded-sdmmc = { git = "https://github.com/Be-ing/embedded-sdmmc-rs/", rev = "7b15cf594ed038df271ad47e2bfc11277defe731" }
 wavv = { git = "https://github.com/LegitCamper/wavv" }
+# wavv = { path = "../wavv" }

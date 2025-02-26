@@ -2,35 +2,35 @@
 #![no_main]
 #![feature(async_trait_bounds)]
 
-// use bt_hci::controller::ExternalController;
+use bt_hci::controller::ExternalController;
 use cyw43_pio::PioSpi;
 use defmt::*;
 use display::MediaUi;
 use embassy_executor::Executor;
+use embassy_futures::select::select;
 use embassy_rp::bind_interrupts;
 use embassy_rp::gpio::{Level, Output};
 use embassy_rp::i2c;
+use embassy_rp::multicore::{Stack, spawn_core1};
 use embassy_rp::peripherals::{DMA_CH0, I2C0, I2C1, PIO0, PIO1, SPI0};
-use embassy_rp::pio;
+use embassy_rp::pio::{self, Pio};
 use embassy_rp::spi;
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::channel::Channel;
 use embassy_time::Timer;
 use embedded_hal_bus::spi::{ExclusiveDevice, NoDelay};
 use embedded_sdmmc::sdcard::{DummyCsPin, SdCard};
-use heapless::Vec;
 use mcp4725::{MCP4725, PowerDown};
 use ssd1306::prelude::{DisplayRotation, I2CInterface};
 use ssd1306::size::DisplaySize128x32;
 use ssd1306::{I2CDisplayInterface, Ssd1306};
 use static_cell::StaticCell;
-use storage::Library;
+use trouble_host::{Address, Host, HostResources};
 use wavv::DataBulk;
-// use trouble_host::{HostResources, prelude::*};
-use embassy_rp::multicore::{Stack, spawn_core1};
 use {defmt_rtt as _, panic_probe as _};
 
-// mod ble;
+#[cfg(feature = "bluetooth")]
+mod ble;
 mod display;
 mod storage;
 
@@ -60,8 +60,6 @@ fn main() -> ! {
         let cs = Output::new(p.PIN_5, Level::High);
 
         let sdcard = SdCard::new(spi_dev, cs, embassy_time::Delay);
-        info!("Card size is {} bytes", sdcard.num_bytes().unwrap());
-
         // Now that the card is initialized, the SPI clock can go faster
         let mut config = spi::Config::default();
         config.frequency = 16_000_000;
@@ -92,11 +90,50 @@ fn main() -> ! {
     let i2c1 = i2c::I2c::new_async(p.I2C1, p.PIN_15, p.PIN_14, Irqs, conf);
     let dac = MCP4725::new(i2c1, 0b010);
 
+    // Sets up Bluetooth and Trouble
+    let (spi, pwr) = {
+        let pwr = Output::new(p.PIN_23, Level::Low);
+        let cs = Output::new(p.PIN_25, Level::High);
+        let mut pio = Pio::new(p.PIO0, Irqs);
+        let spi = PioSpi::new(
+            &mut pio.common,
+            pio.sm0,
+            cyw43_pio::DEFAULT_CLOCK_DIVIDER,
+            pio.irq0,
+            cs,
+            p.PIN_24,
+            p.PIN_29,
+            p.DMA_CH0,
+        );
+        (spi, pwr)
+    };
+
     // Spawn main core task
     let executor0 = EXECUTOR0.init(Executor::new());
-    executor0.run(|spawner| unwrap!(spawner.spawn(core0_task(display, dac))));
+    executor0.run(|spawner| unwrap!(spawner.spawn(core0_task(display, dac, pwr, spi))));
+}
 
-    // Sets up Bluetooth and Trouble
+const DATASIZE: usize = 10;
+static CHANNEL: Channel<CriticalSectionRawMutex, wavv::DataBulk<DATASIZE>, 5> = Channel::new();
+
+// Ui and media playback
+#[embassy_executor::task]
+async fn core0_task(
+    display: Ssd1306<
+        I2CInterface<i2c::I2c<'static, I2C0, i2c::Async>>,
+        DisplaySize128x32,
+        ssd1306::mode::TerminalMode,
+    >,
+    mut dac: MCP4725<i2c::I2c<'static, I2C1, i2c::Async>>,
+    pwr: Output<'static>,
+    spi: PioSpi<'static, PIO0, 0, DMA_CH0>,
+) {
+    info!("hello from core 0");
+    let mut media_ui = MediaUi::new(display, 25);
+    media_ui.draw();
+
+    // Configure bluetooth
+    #[cfg(feature = "bluetooth")]
     {
         // Release:
         #[cfg(not(debug_assertions))]
@@ -114,25 +151,10 @@ fn main() -> ! {
             unsafe { core::slice::from_raw_parts(0x10141400 as *const u8, 6164) },
         );
 
-        let pwr = Output::new(p.PIN_23, Level::Low);
-        let cs = Output::new(p.PIN_25, Level::High);
-        let mut pio = Pio::new(p.PIO0, Irqs);
-        let spi = PioSpi::new(
-            &mut pio.common,
-            pio.sm0,
-            cyw43_pio::DEFAULT_CLOCK_DIVIDER,
-            pio.irq0,
-            cs,
-            p.PIN_24,
-            p.PIN_29,
-            p.DMA_CH0,
-        );
-
         static STATE: StaticCell<cyw43::State> = StaticCell::new();
         let state = STATE.init(cyw43::State::new());
         let (_net_device, bt_device, mut control, runner) =
             cyw43::new_with_bluetooth(state, pwr, spi, fw, btfw).await;
-        unwrap!(spawner.spawn(cyw43_task(runner)));
         control.init(clm).await;
         let controller: ble::ControllerT = ExternalController::new(bt_device);
 
@@ -153,30 +175,13 @@ fn main() -> ! {
         )
         .await;
     }
-}
-
-const DATASIZE: usize = 10;
-static CHANNEL: Channel<CriticalSectionRawMutex, wavv::DataBulk<DATASIZE>, 5> = Channel::new();
-
-// Ui and media playback
-#[embassy_executor::task]
-async fn core0_task(
-    display: Ssd1306<
-        I2CInterface<i2c::I2c<'static, I2C0, i2c::Async>>,
-        DisplaySize128x32,
-        ssd1306::mode::TerminalMode,
-    >,
-    mut dac: MCP4725<i2c::I2c<'static, I2C1, i2c::Async>>,
-) {
-    info!("hello from core 0");
-    let mut media_ui = MediaUi::new(display, 25);
-    media_ui.draw();
 
     info!("playing music");
     loop {
         if let Ok(samples) = CHANNEL.try_receive() {
             if let DataBulk::BitDepth8(samples) = samples {
                 for sample in samples {
+                    info!("sample:{}", sample);
                     dac.set_dac_fast(PowerDown::Normal, sample.into()).ok();
                 }
             }
@@ -194,24 +199,26 @@ async fn core1_task(
     >,
 ) {
     info!("hello from core 1");
+    while let Err(_) = sdcard.num_bytes() {
+        info!("Sdcard not found");
+        Timer::after_secs(1).await;
+    }
     let mut library = storage::Library::new(sdcard);
     info!("reading test file");
     loop {
         library
             .read_wav("test.wav", async |mut wav| {
-                while !wav.is_end() {
-                    let samples = wav.next_n::<DATASIZE>().unwrap();
-                    CHANNEL.send(samples).await;
-                }
+                // info!(
+                //     "File Info:\nsample_rate: {}, num_channels: {}, bit_depth: {}",
+                //     wav.fmt.sample_rate, wav.fmt.num_channels, wav.fmt.bit_depth
+                // );
+
+                // while !wav.is_end() {
+                //     info!("reading sample batch");
+                //     let samples = wav.next_n::<DATASIZE>().unwrap();
+                //     CHANNEL.send(samples).await;
+                // }
             })
             .await;
     }
-
-    // loop {
-    //     CHANNEL
-    //         .send(DataBulk::BitDepth8(
-    //             Vec::from_slice(&[200, 20, 200, 20, 200]).unwrap(),
-    //         ))
-    //         .await;
-    // }
 }

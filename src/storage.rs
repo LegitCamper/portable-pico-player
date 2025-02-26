@@ -77,7 +77,7 @@ impl Library {
 
         let wav = Wav::new(file).unwrap();
         info!("[Library] Wav size: {}", wav.data.end);
-        action(wav);
+        action(wav).await;
     }
 
     pub fn list_files(&mut self) -> Vec<DirEntry, MAX_FILES> {
