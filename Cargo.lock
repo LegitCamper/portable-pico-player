@@ -109,21 +109,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "72b3254f16251a8381aa12e40e3c4d2f0199f8c6508fbecb9d91f575e0fbb8c6"
 
 [[package]]
-name = "bisync"
-version = "0.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5020822f6d6f23196ccaf55e228db36f9de1cf788052b37992e17cbc96ec41a7"
-dependencies = [
- "bisync_macros",
-]
-
-[[package]]
-name = "bisync_macros"
-version = "0.2.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d21f40d350a700f6aa107e45fb26448cf489d34794b2ba4522181dc9f1173af6"
-
-[[package]]
 name = "bit-set"
 version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -779,17 +764,13 @@ dependencies = [
 
 [[package]]
 name = "embedded-sdmmc"
-version = "0.8.0"
-source = "git+https://github.com/Be-ing/embedded-sdmmc-rs/?rev=7b15cf594ed038df271ad47e2bfc11277defe731#7b15cf594ed038df271ad47e2bfc11277defe731"
+version = "0.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "da528dbf3f1c1f0b321552bc334d04799bb17c1936de55bccfb643a4f39300d8"
 dependencies = [
- "bisync",
  "byteorder",
- "embassy-futures",
  "embedded-hal 1.0.0",
- "embedded-hal-async",
- "embedded-io",
- "embedded-io-async",
- "heapless 0.8.0",
+ "heapless 0.7.17",
  "log",
 ]
 
@@ -2988,6 +2969,7 @@ dependencies = [
 [[package]]
 name = "wavv"
 version = "0.2.0"
+source = "git+https://github.com/LegitCamper/wavv?rev=dabfb863a449d2bdcaab0c4971b8bb2263ce6e9b#dabfb863a449d2bdcaab0c4971b8bb2263ce6e9b"
 dependencies = [
  "embedded-sdmmc",
  "heapless 0.8.0",

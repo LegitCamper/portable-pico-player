@@ -1,12 +1,11 @@
 #![no_std]
 #![no_main]
-#![feature(async_trait_bounds)]
 
 #[cfg(feature = "bluetooth")]
 use bt_hci::controller::ExternalController;
 #[cfg(feature = "bluetooth")]
 use embassy_futures::select::select;
-use storage::Library;
+use embedded_sdmmc::{BlockDevice, Mode, VolumeIdx, VolumeManager};
 #[cfg(feature = "bluetooth")]
 use trouble_host::{Address, Host, HostResources};
 
@@ -18,20 +17,20 @@ use embassy_rp::bind_interrupts;
 use embassy_rp::gpio::{Level, Output};
 use embassy_rp::i2c;
 use embassy_rp::multicore::{Stack, spawn_core1};
-use embassy_rp::peripherals::{DMA_CH2, I2C0, I2C1, PIO0, PIO1, SPI0};
+use embassy_rp::peripherals::{DMA_CH2, I2C0, I2C1, PIN_2, PIN_3, PIN_4, PIN_5, PIO0, PIO1, SPI0};
 use embassy_rp::pio::{self, Pio};
 use embassy_rp::spi;
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::channel::Channel;
-use embassy_time::{Delay, Timer};
+use embassy_time::{Delay, Duration, Timer};
 use embedded_hal_bus::spi::ExclusiveDevice;
-use embedded_sdmmc::asynchronous::sdcard::SdCard;
+use embedded_sdmmc::sdcard::{DummyCsPin, SdCard};
 use mcp4725::{MCP4725, PowerDown};
 use ssd1306::prelude::{DisplayRotation, I2CInterface};
 use ssd1306::size::DisplaySize128x32;
 use ssd1306::{I2CDisplayInterface, Ssd1306};
 use static_cell::StaticCell;
-use wavv::DataBulk;
+use wavv::{DataBulk, Wav};
 use {defmt_rtt as _, panic_probe as _};
 
 #[cfg(feature = "bluetooth")]
@@ -44,44 +43,18 @@ static EXECUTOR0: StaticCell<Executor> = StaticCell::new();
 static EXECUTOR1: StaticCell<Executor> = StaticCell::new();
 
 bind_interrupts!(struct Irqs {
-    PIO0_IRQ_0 => pio::InterruptHandler<PIO0>;
+    // oled
     I2C0_IRQ => i2c::InterruptHandler<I2C0>;
-    PIO1_IRQ_0 => pio::InterruptHandler<PIO1>;
+    // dac
+    PIO0_IRQ_0 => pio::InterruptHandler<PIO0>;
     I2C1_IRQ => i2c::InterruptHandler<I2C1>;
+    // bluetooth
+    PIO1_IRQ_0 => pio::InterruptHandler<PIO1>;
 });
 
 #[cortex_m_rt::entry]
 fn main() -> ! {
     let p = embassy_rp::init(Default::default());
-
-    // Set up SPI0 for the Micro SD reader
-    let sdcard = {
-        let mut config = spi::Config::default();
-        config.frequency = 400_000;
-        let spi = spi::Spi::new(
-            p.SPI0, p.PIN_2, p.PIN_3, p.PIN_4, p.DMA_CH0, p.DMA_CH1, config,
-        );
-
-        let cs = Output::new(p.PIN_5, Level::High);
-        let spi = ExclusiveDevice::new(spi, cs, Delay);
-
-        let sdcard = SdCard::new(spi, Delay);
-        // Now that the card is initialized, the SPI clock can go faster
-        let mut config = spi::Config::default();
-        config.frequency = 16_000_000;
-        sdcard.spi(|dev| dev.bus_mut().set_config(&config));
-        sdcard
-    };
-
-    // spawning compute task
-    spawn_core1(
-        p.CORE1,
-        unsafe { &mut *core::ptr::addr_of_mut!(CORE1_STACK) },
-        move || {
-            let executor1 = EXECUTOR1.init(Executor::new());
-            executor1.run(|spawner| unwrap!(spawner.spawn(core1_task(sdcard))));
-        },
-    );
 
     // Set up I2C0 for the SSD1306 OLED Display
     let display = {
@@ -100,7 +73,7 @@ fn main() -> ! {
     let (spi, pwr) = {
         let pwr = Output::new(p.PIN_23, Level::Low);
         let cs = Output::new(p.PIN_25, Level::High);
-        let mut pio = Pio::new(p.PIO0, Irqs);
+        let mut pio = Pio::new(p.PIO1, Irqs);
         let spi = PioSpi::new(
             &mut pio.common,
             pio.sm0,
@@ -114,17 +87,29 @@ fn main() -> ! {
         (spi, pwr)
     };
 
-    // Spawn main core task
+    // spawning ui and io task
+    spawn_core1(
+        p.CORE1,
+        unsafe { &mut *core::ptr::addr_of_mut!(CORE1_STACK) },
+        move || {
+            let executor1 = EXECUTOR1.init(Executor::new());
+            executor1.run(|spawner| unwrap!(spawner.spawn(core1_task(display, dac, pwr, spi))));
+        },
+    );
+
+    // spawning compute task
     let executor0 = EXECUTOR0.init(Executor::new());
-    executor0.run(|spawner| unwrap!(spawner.spawn(core0_task(display, dac, pwr, spi))));
+    executor0.run(|spawner| {
+        unwrap!(spawner.spawn(core0_task(p.SPI0, p.PIN_2, p.PIN_3, p.PIN_4, p.PIN_5,)))
+    });
 }
 
-const DATASIZE: usize = 10;
-static CHANNEL: Channel<CriticalSectionRawMutex, wavv::DataBulk<DATASIZE>, 5> = Channel::new();
+const DATASIZE: usize = 64;
+static CHANNEL: Channel<CriticalSectionRawMutex, wavv::DataBulk<DATASIZE>, 50> = Channel::new();
 
 // Ui and media playback
 #[embassy_executor::task]
-async fn core0_task(
+async fn core1_task(
     display: Ssd1306<
         I2CInterface<i2c::I2c<'static, I2C0, i2c::Async>>,
         DisplaySize128x32,
@@ -132,7 +117,7 @@ async fn core0_task(
     >,
     mut dac: MCP4725<i2c::I2c<'static, I2C1, i2c::Async>>,
     pwr: Output<'static>,
-    spi: PioSpi<'static, PIO0, 0, DMA_CH2>,
+    spi: PioSpi<'static, PIO1, 0, DMA_CH2>,
 ) {
     info!("hello from core 0");
     let mut media_ui = MediaUi::new(display, 25);
@@ -184,12 +169,11 @@ async fn core0_task(
 
     info!("playing music");
     loop {
-        if let Ok(samples) = CHANNEL.try_receive() {
-            if let DataBulk::BitDepth8(samples) = samples {
-                for sample in samples {
-                    info!("sample:{}", sample);
-                    dac.set_dac_fast(PowerDown::Normal, sample.into()).ok();
-                }
+        let samples = CHANNEL.receive().await;
+        if let DataBulk::BitDepth8(samples) = samples {
+            for sample in samples {
+                dac.set_dac_fast(PowerDown::Normal, sample.into()).ok();
+                Timer::after(Duration::from_hz(4000)).await;
             }
         }
     }
@@ -197,33 +181,62 @@ async fn core0_task(
 
 // File system & Decoding
 #[embassy_executor::task]
-async fn core1_task(
-    sdcard: SdCard<
-        ExclusiveDevice<spi::Spi<'static, SPI0, spi::Async>, Output<'static>, Delay>,
-        embassy_time::Delay,
-    >,
+async fn core0_task(
+    // Sd card IO
+    spi0: SPI0,
+    pin2: PIN_2,
+    pin3: PIN_3,
+    pin4: PIN_4,
+    pin5: PIN_5,
 ) {
     info!("hello from core 1");
-    while let Err(_) = sdcard.num_bytes().await {
+
+    // Set up SPI0 for the Micro SD reader
+    let sdcard = {
+        let mut config = spi::Config::default();
+        config.frequency = 400_000;
+        let spi = spi::Spi::new_blocking(spi0, pin2, pin3, pin4, config);
+        // Use a dummy cs pin here, for embedded-hal SpiDevice compatibility reasons
+        let spi_dev = ExclusiveDevice::new_no_delay(spi, DummyCsPin);
+        // Real cs pin
+        let cs = Output::new(pin5, Level::High);
+
+        let sdcard = SdCard::new(spi_dev, cs, embassy_time::Delay);
+        info!("Card size is {} bytes", sdcard.num_bytes().unwrap());
+
+        // Now that the card is initialized, the SPI clock can go faster
+        let mut config = spi::Config::default();
+        config.frequency = 16_000_000;
+        sdcard.spi(|dev| dev.bus_mut().set_config(&config));
+        sdcard
+    };
+
+    while let Err(_) = sdcard.num_bytes() {
         info!("Sdcard not found, looking again in 1 second");
         Timer::after_secs(1).await;
     }
-    let mut library = Library::new(sdcard);
-    info!("reading test file");
-    loop {
-        library
-            .read_wav("test.wav", async |mut wav| {
-                info!(
-                    "File Info:\nsample_rate: {}, num_channels: {}, bit_depth: {}",
-                    wav.fmt.sample_rate, wav.fmt.num_channels, wav.fmt.bit_depth
-                );
+    info!("sd size:{}", sdcard.num_bytes().unwrap());
 
-                while !wav.is_end() {
-                    info!("reading sample batch");
-                    let samples = wav.next_n::<DATASIZE>().await.unwrap();
-                    CHANNEL.send(samples).await;
-                }
-            })
-            .await;
+    let mut volume_mgr = VolumeManager::new(sdcard, storage::DummyTimesource());
+    let mut volume0 = volume_mgr.open_volume(VolumeIdx(0)).unwrap();
+    let mut root_dir = volume0.open_root_dir().unwrap();
+    let mut music_dir = root_dir.open_dir("music").unwrap();
+    info!("reading test file");
+
+    loop {
+        let file = music_dir
+            .open_file_in_dir("test.wav", Mode::ReadOnly)
+            .unwrap();
+        let mut wav = Wav::new(file).unwrap();
+        info!("[Library] Wav size: {}", wav.data.end);
+        info!(
+            "File Info:\nsample_rate: {}, num_channels: {}, bit_depth: {}",
+            wav.fmt.sample_rate, wav.fmt.num_channels, wav.fmt.bit_depth
+        );
+
+        while !wav.is_end() {
+            let samples = wav.next_n::<DATASIZE>().unwrap();
+            CHANNEL.send(samples).await;
+        }
     }
 }

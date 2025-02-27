@@ -2,10 +2,14 @@ use defmt::*;
 use embassy_rp::gpio::Output;
 use embassy_rp::peripherals::SPI0;
 use embassy_rp::spi::{self, Spi};
+use embassy_sync::blocking_mutex::raw::RawMutex;
+use embassy_sync::mutex::Mutex;
 use embassy_time::Delay;
-use embedded_hal_bus::spi::ExclusiveDevice;
-use embedded_sdmmc::asynchronous::{
-    DirEntry, Mode, SdCard, TimeSource, Timestamp, VolumeIdx, VolumeManager,
+use embedded_hal_bus::spi::{ExclusiveDevice, NoDelay};
+use embedded_sdmmc::sdcard::DummyCsPin;
+use embedded_sdmmc::{
+    DirEntry, Directory, File, Mode, SdCard, TimeSource, Timestamp, Volume, VolumeIdx,
+    VolumeManager,
 };
 use heapless::Vec;
 use wavv::Wav;
@@ -32,56 +36,38 @@ pub const MAX_FILES: usize = 4;
 pub const MAX_VOLUMES: usize = 1;
 
 pub type SD = SdCard<
-    ExclusiveDevice<
-        embassy_rp::spi::Spi<'static, SPI0, embassy_rp::spi::Async>,
-        Output<'static>,
-        Delay,
-    >,
+    ExclusiveDevice<spi::Spi<'static, SPI0, spi::Blocking>, DummyCsPin, NoDelay>,
+    Output<'static>,
     Delay,
 >;
 
-pub struct Library {
-    volume_mgr: VolumeManager<SD, DummyTimesource, MAX_DIRS, MAX_FILES, MAX_VOLUMES>,
-}
+// pub struct Library<'a> {
+//     directory: Directory<'a, SD, DummyTimesource, MAX_DIRS, MAX_FILES, MAX_VOLUMES>,
+// }
 
-impl Library {
-    pub fn new(
-        sdcard: SdCard<
-            ExclusiveDevice<Spi<'static, SPI0, spi::Async>, Output<'static>, Delay>,
-            Delay,
-        >,
-    ) -> Self {
-        Self {
-            volume_mgr: VolumeManager::new(sdcard, DummyTimesource()),
-        }
-    }
+// impl<'a> Library<'a> {
+//     pub fn new(dir: Directory<'a, SD, DummyTimesource, MAX_DIRS, MAX_FILES, MAX_VOLUMES>) -> Self {
+//         Self { directory: dir }
+//     }
 
-    pub async fn read_wav(
-        &mut self,
-        file: &str,
-        mut action: impl async FnMut(Wav<SD, DummyTimesource, MAX_DIRS, MAX_FILES, MAX_VOLUMES>),
-    ) {
-        let volume0 = self.volume_mgr.open_volume(VolumeIdx(0)).await.unwrap();
-        let root = volume0.open_root_dir().unwrap();
-        let music = root.open_dir("music").await.unwrap();
+//     pub fn list_files(&mut self) -> Vec<DirEntry, MAX_FILES> {
+//         let mut files: Vec<DirEntry, MAX_FILES> = Vec::new();
+//         self.directory
+//             .iterate_dir(|file| files.push(file.clone()).unwrap())
+//             .unwrap();
 
-        let file = music.open_file_in_dir(file, Mode::ReadOnly).await.unwrap();
+//         files
+//     }
+// }
 
-        let wav = Wav::new(file).await.unwrap();
-        info!("[Library] Wav size: {}", wav.data.end);
-        action(wav).await;
-    }
+// pub fn read_wav<'a>(
+//     mut dir: Directory<'a, SD, DummyTimesource, MAX_DIRS, MAX_FILES, MAX_VOLUMES>,
+//     file: &str,
+// ) -> Wav<'a, SD, DummyTimesource, MAX_DIRS, MAX_FILES, MAX_VOLUMES> {
+//     let file = dir.open_file_in_dir(file, Mode::ReadOnly).unwrap();
 
-    pub async fn list_files(&mut self) -> Vec<DirEntry, MAX_FILES> {
-        let volume0 = self.volume_mgr.open_volume(VolumeIdx(0)).await.unwrap();
-        let root_dir = volume0.open_root_dir().unwrap();
+//     let wav = Wav::new(file).unwrap();
+//     info!("[Library] Wav size: {}", wav.data.end);
 
-        let mut files: Vec<DirEntry, MAX_FILES> = Vec::new();
-        root_dir
-            .iterate_dir(|file| files.push(file.clone()).unwrap())
-            .await
-            .unwrap();
-
-        files
-    }
-}
+//     wav
+// }

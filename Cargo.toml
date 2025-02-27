@@ -5,7 +5,7 @@ edition = "2024"
 
 [dependencies]
 embassy-executor = { version = "0.7", default-features = false, features = [
-  "task-arena-size-196608",
+  "task-arena-size-98304",
   "arch-cortex-m",
   "executor-thread",
   "defmt",
@@ -49,9 +49,9 @@ portable-atomic = { version = "1.5", features = ["critical-section"] }
 heapless = "0.8.0"
 libm = "0.2.11"
 
-ssd1306 = "0.9.0"
-embedded-sdmmc = "0.8.0"
+embedded-sdmmc = { version = "0.7.0", default-features = false }
 mcp4725 = "0.4.2"
+ssd1306 = "0.9.0"
 wavv = "0.2.0"
 
 trouble_audio = { git = "https://github.com/LegitCamper/trouble_audio/", features = [
@@ -79,6 +79,5 @@ embassy-embedded-hal = { git = "https://github.com/embassy-rs/embassy.git", rev 
 cyw43 = { git = "https://github.com/embassy-rs/embassy.git", rev = "195b1a593a4f51ebc7ae61b5045c620a1dbd25d8" }
 cyw43-pio = { git = "https://github.com/embassy-rs/embassy.git", rev = "195b1a593a4f51ebc7ae61b5045c620a1dbd25d8" }
 trouble-host = { git = "https://github.com/embassy-rs/trouble.git", rev = "7700932050221fa68a274fe713f7d1eb3d477ea2" }
-embedded-sdmmc = { git = "https://github.com/Be-ing/embedded-sdmmc-rs/", rev = "7b15cf594ed038df271ad47e2bfc11277defe731" }
-# wavv = { git = "https://github.com/LegitCamper/wavv" }
-wavv = { path = "../wavv" }
+# embedded-sdmmc = { git = "https://github.com/Be-ing/embedded-sdmmc-rs/", rev = "7b15cf594ed038df271ad47e2bfc11277defe731" } # async
+wavv = { git = "https://github.com/LegitCamper/wavv", rev = "dabfb863a449d2bdcaab0c4971b8bb2263ce6e9b" }
