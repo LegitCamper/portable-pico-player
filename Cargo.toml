@@ -41,6 +41,7 @@ defmt = "0.3"
 defmt-rtt = "0.4.0"
 
 embedded-hal-bus = { version = "0.1", features = ["async"] }
+embedded-hal = "1.0.0"
 cortex-m = { version = "0.7.6" }
 cortex-m-rt = "0.7.0"
 panic-probe = { version = "0.3", features = ["print-defmt"] }
@@ -49,9 +50,11 @@ portable-atomic = { version = "1.5", features = ["critical-section"] }
 heapless = "0.8.0"
 libm = "0.2.11"
 
+mipidsi = "0.9.0"
+embedded-graphics = "0.8.1"
+embedded-graphics-core = "0.4.0"
+
 embedded-sdmmc = { version = "0.7.0", default-features = false }
-mcp4725 = "0.4.2"
-ssd1306 = "0.9.0"
 wavv = "0.2.0"
 
 trouble_audio = { git = "https://github.com/LegitCamper/trouble_audio/", features = [
