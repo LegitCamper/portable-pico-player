@@ -74,7 +74,7 @@ fn main() -> ! {
     };
 
     // Set up SPI1 for ST7789 TFT Display
-    let display = {
+    let (display, backlight) = {
         let mut config = spi::Config::default();
         config.frequency = 2_000_000;
         let spi = Spi::new_blocking(p.SPI1, p.PIN_10, p.PIN_11, p.PIN_12, config);
@@ -91,7 +91,7 @@ fn main() -> ! {
             .init(&mut Delay)
             .unwrap();
 
-        display
+        (display, Output::new(p.PIN_15, Level::Low))
     };
 
     // spawning ui and io task
@@ -100,7 +100,8 @@ fn main() -> ! {
         unsafe { &mut *core::ptr::addr_of_mut!(CORE1_STACK) },
         move || {
             let executor1 = EXECUTOR1.init(Executor::new());
-            executor1.run(|spawner| unwrap!(spawner.spawn(core1_task(display, pwr, spi))));
+            executor1
+                .run(|spawner| unwrap!(spawner.spawn(core1_task(display, backlight, pwr, spi))));
         },
     );
 
@@ -134,13 +135,16 @@ static CHANNEL: Channel<CriticalSectionRawMutex, wavv::DataBulk<DATASIZE>, 5> = 
 #[embassy_executor::task]
 async fn core1_task(
     mut display: display::DISPLAY,
+    backlight: Output<'static>,
     // mut dac: MCP4725<i2c::I2c<'static, I2C1, i2c::Async>>,
     pwr: Output<'static>,
     spi: PioSpi<'static, PIO1, 0, DMA_CH2>,
 ) {
     info!("hello from core 0");
 
-    let mut media_ui = MediaUi::new(display);
+    let mut media_ui = MediaUi::new(display, backlight);
+    Timer::after_secs(2).await;
+    media_ui.sleep();
 
     // Configure bluetooth
     #[cfg(feature = "bluetooth")]

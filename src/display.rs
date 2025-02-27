@@ -1,4 +1,4 @@
-use core::str::FromStr;
+use core::{any::Any, str::FromStr};
 
 use embassy_rp::{
     gpio::Output,
@@ -55,6 +55,7 @@ pub type DISPLAY = Display<
 
 pub struct MediaUi {
     display: DISPLAY,
+    backlight: Output<'static>,
     pub paused: bool,
     pub song: String<SONG_NAME_LEN>,
     pub volume: u8,
@@ -70,14 +71,25 @@ impl MediaUi {
     const char_h: u8 = 20;
     const text_style: MonoTextStyle<'_, Rgb565> = MonoTextStyle::new(&FONT_10X20, Rgb565::WHITE);
 
-    pub fn new(mut display: DISPLAY) -> Self {
+    pub fn new(mut display: DISPLAY, backlight: Output<'static>) -> Self {
         display.clear(Rgb565::WHITE).unwrap();
         Self {
             display,
+            backlight,
             paused: true,
             song: String::from_str("Not Playing").unwrap(),
             volume: 100,
         }
+    }
+
+    pub fn sleep(&mut self) {
+        self.backlight.set_low();
+        self.display.clear(Rgb565::BLACK).unwrap();
+    }
+
+    pub fn wake(&mut self) {
+        self.backlight.set_high();
+        self.display.clear(Rgb565::WHITE).unwrap();
     }
 
     pub fn destroy(self) -> DISPLAY {
