@@ -25,7 +25,8 @@ use embassy_sync::channel::Channel;
 use embassy_time::{Delay, Duration, Timer};
 use embedded_hal_bus::spi::ExclusiveDevice;
 use embedded_sdmmc::sdcard::{DummyCsPin, SdCard};
-use mcp4725::{MCP4725, PowerDown};
+// use mcp4725::{MCP4725, PowerDown};
+use ad5693x::*;
 use ssd1306::prelude::{DisplayRotation, I2CInterface};
 use ssd1306::size::DisplaySize128x32;
 use ssd1306::{I2CDisplayInterface, Ssd1306};
@@ -67,7 +68,7 @@ fn main() -> ! {
     let mut conf = i2c::Config::default();
     conf.frequency = 1_000_000;
     let i2c1 = i2c::I2c::new_async(p.I2C1, p.PIN_15, p.PIN_14, Irqs, conf);
-    let dac = MCP4725::new(i2c1, 0b010);
+    let dac = AD569x::new(i2c1, 0x4C).unwrap();
 
     // Sets up Bluetooth and Trouble
     let (spi, pwr) = {
@@ -133,7 +134,7 @@ async fn core1_task(
         DisplaySize128x32,
         ssd1306::mode::TerminalMode,
     >,
-    mut dac: MCP4725<i2c::I2c<'static, I2C1, i2c::Async>>,
+    mut dac: AD569x<i2c::I2c<'static, I2C1, i2c::Async>>,
     pwr: Output<'static>,
     spi: PioSpi<'static, PIO1, 0, DMA_CH2>,
 ) {
@@ -185,12 +186,14 @@ async fn core1_task(
         .await;
     }
 
+    dac.set_mode(ad5693x::Mode::Normal, false, false).unwrap();
+
     info!("playing music");
     loop {
         let samples = CHANNEL.receive().await;
         if let DataBulk::BitDepth8(samples) = samples {
             for sample in samples {
-                dac.set_dac(PowerDown::Normal, sample.into()).ok();
+                dac.write_update(sample.into()).ok();
                 Timer::after(Duration::from_hz(8000)).await;
             }
         }
@@ -201,6 +204,7 @@ async fn core1_task(
 #[embassy_executor::task]
 async fn core0_task(sdcard: storage::SD) {
     info!("hello from core 1");
+
     while let Err(_) = sdcard.num_bytes() {
         info!("Sdcard not found, looking again in 1 second");
         Timer::after_secs(1).await;
