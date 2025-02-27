@@ -97,11 +97,29 @@ fn main() -> ! {
         },
     );
 
+    // Set up SPI0 for the Micro SD reader
+    let sdcard = {
+        let mut config = spi::Config::default();
+        config.frequency = 400_000;
+        let spi = spi::Spi::new_blocking(p.SPI0, p.PIN_2, p.PIN_3, p.PIN_4, config);
+        // Use a dummy cs pin here, for embedded-hal SpiDevice compatibility reasons
+        let spi_dev = ExclusiveDevice::new_no_delay(spi, DummyCsPin);
+        // Real cs pin
+        let cs = Output::new(p.PIN_5, Level::High);
+
+        let sdcard = SdCard::new(spi_dev, cs, embassy_time::Delay);
+        info!("Card size is {} bytes", sdcard.num_bytes().unwrap());
+
+        // Now that the card is initialized, the SPI clock can go faster
+        let mut config = spi::Config::default();
+        config.frequency = 16_000_000;
+        sdcard.spi(|dev| dev.bus_mut().set_config(&config));
+        sdcard
+    };
+
     // spawning compute task
     let executor0 = EXECUTOR0.init(Executor::new());
-    executor0.run(|spawner| {
-        unwrap!(spawner.spawn(core0_task(p.SPI0, p.PIN_2, p.PIN_3, p.PIN_4, p.PIN_5,)))
-    });
+    executor0.run(|spawner| unwrap!(spawner.spawn(core0_task(sdcard))));
 }
 
 const DATASIZE: usize = 64;
@@ -172,8 +190,8 @@ async fn core1_task(
         let samples = CHANNEL.receive().await;
         if let DataBulk::BitDepth8(samples) = samples {
             for sample in samples {
-                dac.set_dac_fast(PowerDown::Normal, sample.into()).ok();
-                Timer::after(Duration::from_hz(4000)).await;
+                dac.set_dac(PowerDown::Normal, sample.into()).ok();
+                Timer::after(Duration::from_hz(8000)).await;
             }
         }
     }
@@ -181,36 +199,8 @@ async fn core1_task(
 
 // File system & Decoding
 #[embassy_executor::task]
-async fn core0_task(
-    // Sd card IO
-    spi0: SPI0,
-    pin2: PIN_2,
-    pin3: PIN_3,
-    pin4: PIN_4,
-    pin5: PIN_5,
-) {
+async fn core0_task(sdcard: storage::SD) {
     info!("hello from core 1");
-
-    // Set up SPI0 for the Micro SD reader
-    let sdcard = {
-        let mut config = spi::Config::default();
-        config.frequency = 400_000;
-        let spi = spi::Spi::new_blocking(spi0, pin2, pin3, pin4, config);
-        // Use a dummy cs pin here, for embedded-hal SpiDevice compatibility reasons
-        let spi_dev = ExclusiveDevice::new_no_delay(spi, DummyCsPin);
-        // Real cs pin
-        let cs = Output::new(pin5, Level::High);
-
-        let sdcard = SdCard::new(spi_dev, cs, embassy_time::Delay);
-        info!("Card size is {} bytes", sdcard.num_bytes().unwrap());
-
-        // Now that the card is initialized, the SPI clock can go faster
-        let mut config = spi::Config::default();
-        config.frequency = 16_000_000;
-        sdcard.spi(|dev| dev.bus_mut().set_config(&config));
-        sdcard
-    };
-
     while let Err(_) = sdcard.num_bytes() {
         info!("Sdcard not found, looking again in 1 second");
         Timer::after_secs(1).await;
