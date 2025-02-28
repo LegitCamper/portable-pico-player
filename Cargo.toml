@@ -60,6 +60,7 @@ wavv = "0.2.0"
 trouble_audio = { git = "https://github.com/LegitCamper/trouble_audio/", features = [
   "defmt",
 ], optional = true }
+format_no_std = "1.2.0"
 # trouble_audio = { path = "../trouble_audio/", features = ["defmt"] }
 
 [build-dependencies]

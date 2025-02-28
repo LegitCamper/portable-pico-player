@@ -5,18 +5,6 @@
 use bt_hci::controller::ExternalController;
 #[cfg(feature = "bluetooth")]
 use embassy_futures::select::select;
-use embedded_graphics::mock_display::ColorMapping;
-use embedded_graphics::pixelcolor::{BinaryColor, Rgb565, Rgb666};
-use embedded_graphics::prelude::{Point, RgbColor};
-use embedded_graphics::primitives::{PrimitiveStyle, Triangle};
-use embedded_graphics::{
-    framebuffer::{Framebuffer, buffer_size},
-    mock_display::MockDisplay,
-    mono_font::{MonoTextStyle, ascii::FONT_6X10},
-    prelude::*,
-    text::{Alignment, Text},
-};
-use embedded_graphics_core::draw_target::DrawTarget;
 use embedded_hal::delay::DelayNs;
 use embedded_sdmmc::{BlockDevice, Mode, VolumeIdx, VolumeManager};
 use mipidsi::interface::SpiInterface;
@@ -96,18 +84,15 @@ async fn main(_spawner: Spawner) {
     Timer::after_secs(4).await;
 
     let mut media_ui = MediaUi::new(display);
-    Timer::after_secs(8).await;
-    media_ui.center_str("Loading...");
-    Timer::after_secs(8).await;
-    media_ui.sleep();
-    Timer::after_secs(4).await;
-    // media_ui.deep_sleep();
-    // Timer::after_secs(2).await;
-    // media_ui.wake_deep();
-    // Timer::after_secs(2).await;
-    media_ui.wake();
+    media_ui.init();
     Timer::after_secs(2).await;
-    media_ui.center_str("Woke back UP!!!");
+
+    let mut progress = 0;
+    while progress < 100 {
+        media_ui.draw_played(progress);
+        progress += 1;
+        Timer::after_secs(2).await;
+    }
 
     // // spawning ui and io task
     // spawn_core1(
