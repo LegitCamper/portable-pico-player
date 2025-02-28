@@ -51,8 +51,8 @@ heapless = "0.8.0"
 libm = "0.2.11"
 
 mipidsi = "0.9.0"
-embedded-graphics = "0.8.1"
-embedded-graphics-core = "0.4.0"
+embedded-graphics = { version = "0.8.1", features = ["defmt"] }
+embedded-graphics-core = { version = "0.4.0", features = ["defmt"] }
 
 embedded-sdmmc = { version = "0.7.0", default-features = false }
 wavv = "0.2.0"
@@ -73,14 +73,14 @@ bluetooth = ["dep:trouble_audio"]
 debug = 2
 
 [patch.crates-io]
-embassy-executor = { git = "https://github.com/embassy-rs/embassy.git", rev = "195b1a593a4f51ebc7ae61b5045c620a1dbd25d8" }
-embassy-rp = { git = "https://github.com/embassy-rs/embassy.git", rev = "195b1a593a4f51ebc7ae61b5045c620a1dbd25d8" }
-embassy-sync = { git = "https://github.com/embassy-rs/embassy.git", rev = "195b1a593a4f51ebc7ae61b5045c620a1dbd25d8" }
-embassy-futures = { git = "https://github.com/embassy-rs/embassy.git", rev = "195b1a593a4f51ebc7ae61b5045c620a1dbd25d8" }
-embassy-time = { git = "https://github.com/embassy-rs/embassy.git", rev = "195b1a593a4f51ebc7ae61b5045c620a1dbd25d8" }
-embassy-embedded-hal = { git = "https://github.com/embassy-rs/embassy.git", rev = "195b1a593a4f51ebc7ae61b5045c620a1dbd25d8" }
-cyw43 = { git = "https://github.com/embassy-rs/embassy.git", rev = "195b1a593a4f51ebc7ae61b5045c620a1dbd25d8" }
-cyw43-pio = { git = "https://github.com/embassy-rs/embassy.git", rev = "195b1a593a4f51ebc7ae61b5045c620a1dbd25d8" }
+embassy-executor = { git = "https://github.com/embassy-rs/embassy.git", rev = "17301c00e986c5b8536435ea31ebf5aaf13aed17" }
+embassy-rp = { git = "https://github.com/embassy-rs/embassy.git", rev = "17301c00e986c5b8536435ea31ebf5aaf13aed17" }
+embassy-sync = { git = "https://github.com/embassy-rs/embassy.git", rev = "17301c00e986c5b8536435ea31ebf5aaf13aed17" }
+embassy-futures = { git = "https://github.com/embassy-rs/embassy.git", rev = "17301c00e986c5b8536435ea31ebf5aaf13aed17" }
+embassy-time = { git = "https://github.com/embassy-rs/embassy.git", rev = "17301c00e986c5b8536435ea31ebf5aaf13aed17" }
+embassy-embedded-hal = { git = "https://github.com/embassy-rs/embassy.git", rev = "17301c00e986c5b8536435ea31ebf5aaf13aed17" }
+cyw43 = { git = "https://github.com/embassy-rs/embassy.git", rev = "17301c00e986c5b8536435ea31ebf5aaf13aed17" }
+cyw43-pio = { git = "https://github.com/embassy-rs/embassy.git", rev = "17301c00e986c5b8536435ea31ebf5aaf13aed17" }
 trouble-host = { git = "https://github.com/embassy-rs/trouble.git", rev = "7700932050221fa68a274fe713f7d1eb3d477ea2" }
 # embedded-sdmmc = { git = "https://github.com/Be-ing/embedded-sdmmc-rs/", rev = "7b15cf594ed038df271ad47e2bfc11277defe731" } # async
 wavv = { git = "https://github.com/LegitCamper/wavv", rev = "dabfb863a449d2bdcaab0c4971b8bb2263ce6e9b" }

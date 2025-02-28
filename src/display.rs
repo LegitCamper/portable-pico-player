@@ -1,5 +1,6 @@
 use core::{any::Any, str::FromStr};
 
+use defmt::*;
 use embassy_rp::{
     gpio::Output,
     peripherals::SPI1,
@@ -69,7 +70,6 @@ impl MediaUi {
     // Text
     const char_w: u8 = 10;
     const char_h: u8 = 20;
-    const text_style: MonoTextStyle<'_, Rgb565> = MonoTextStyle::new(&FONT_10X20, Rgb565::WHITE);
 
     pub fn new(mut display: DISPLAY, backlight: Output<'static>) -> Self {
         display.clear(Rgb565::WHITE).unwrap();
@@ -85,6 +85,7 @@ impl MediaUi {
     pub fn sleep(&mut self) {
         self.backlight.set_low();
         self.display.clear(Rgb565::BLACK).unwrap();
+        self.display.sleep(&mut Delay).unwrap();
     }
 
     pub fn wake(&mut self) {
@@ -92,14 +93,20 @@ impl MediaUi {
         self.display.clear(Rgb565::WHITE).unwrap();
     }
 
-    pub fn destroy(self) -> DISPLAY {
-        self.display
+    pub fn destroy(self) -> (DISPLAY, Output<'static>) {
+        (self.display, self.backlight)
     }
 
     pub fn center_str(&mut self, text: &str) {
-        Text::new(text, Point::new(W / 2, H / 2), Self::text_style)
-            .draw(&mut self.display)
-            .unwrap();
+        if let Err(e) = Text::new(
+            text,
+            Point::new(100, 100),
+            MonoTextStyle::new(&FONT_10X20, Rgb565::RED),
+        )
+        .draw(&mut self.display)
+        {
+            error!("Could not write to display",)
+        }
     }
 
     // fn center_int(&self, num: u8) -> u8 {

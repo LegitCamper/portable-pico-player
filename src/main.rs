@@ -6,8 +6,16 @@ use bt_hci::controller::ExternalController;
 #[cfg(feature = "bluetooth")]
 use embassy_futures::select::select;
 use embedded_graphics::mock_display::ColorMapping;
-use embedded_graphics::pixelcolor::{Rgb565, Rgb666};
-use embedded_graphics::prelude::RgbColor;
+use embedded_graphics::pixelcolor::{BinaryColor, Rgb565, Rgb666};
+use embedded_graphics::prelude::{Point, RgbColor};
+use embedded_graphics::primitives::{PrimitiveStyle, Triangle};
+use embedded_graphics::{
+    framebuffer::{Framebuffer, buffer_size},
+    mock_display::MockDisplay,
+    mono_font::{MonoTextStyle, ascii::FONT_6X10},
+    prelude::*,
+    text::{Alignment, Text},
+};
 use embedded_graphics_core::draw_target::DrawTarget;
 use embedded_hal::delay::DelayNs;
 use embedded_sdmmc::{BlockDevice, Mode, VolumeIdx, VolumeManager};
@@ -84,15 +92,18 @@ fn main() -> ! {
         static BUFFER: StaticCell<[u8; 512]> = StaticCell::new();
         let buffer = BUFFER.init([0; 512]);
         let interface = SpiInterface::new(spi_dev, dc, buffer);
-        let display = mipidsi::Builder::new(ST7789, interface)
+        let mut display = mipidsi::Builder::new(ST7789, interface)
             .orientation(Orientation::new().rotate(mipidsi::options::Rotation::Deg90))
             .display_size(display::H as u16, display::W as u16)
             .invert_colors(ColorInversion::Inverted)
             .init(&mut Delay)
             .unwrap();
-
         (display, Output::new(p.PIN_15, Level::Low))
     };
+
+    let mut media_ui = MediaUi::new(display, backlight);
+    media_ui.center_str("Loading...");
+    let (display, backlight) = media_ui.destroy();
 
     // spawning ui and io task
     spawn_core1(
@@ -143,8 +154,9 @@ async fn core1_task(
     info!("hello from core 0");
 
     let mut media_ui = MediaUi::new(display, backlight);
+    media_ui.center_str("Loading...");
     Timer::after_secs(2).await;
-    media_ui.sleep();
+    // media_ui.sleep();
 
     // Configure bluetooth
     #[cfg(feature = "bluetooth")]
