@@ -1,10 +1,9 @@
-use core::{any::Any, str::FromStr};
-
+use core::str::FromStr;
 use defmt::*;
 use embassy_rp::{
-    gpio::Output,
-    peripherals::SPI1,
-    spi::{Blocking, Spi},
+    gpio::{Drive, Output},
+    peripherals::{PIN_10, PIN_11, SPI1},
+    spi::{self, Blocking, Spi},
 };
 use embassy_time::Delay;
 use embedded_graphics::{
@@ -16,13 +15,124 @@ use embedded_graphics::{
 };
 use embedded_hal_bus::spi::ExclusiveDevice;
 use heapless::String;
-use mipidsi::{Display, NoResetPin, interface::SpiInterface, models::ST7789};
+use mipidsi::{
+    Display as MipiDisplay, NoResetPin,
+    interface::SpiInterface,
+    models::ST7789,
+    options::{ColorInversion, Orientation},
+};
 
-pub const SONG_NAME_LEN: usize = 20;
+pub const SONG_NAME_LEN: usize = 25;
 
-// ST7789 TFT Display diamentions
-pub const W: i32 = 320;
-pub const H: i32 = 240;
+pub struct MediaUi<'a> {
+    display: Display<'a>,
+    pub paused: bool,
+    pub song: String<SONG_NAME_LEN>,
+    pub volume: u8,
+}
+
+impl<'a> MediaUi<'a> {
+    pub fn new(mut display: Display<'a>) -> Self {
+        display.display.clear(Rgb565::WHITE).unwrap();
+        Self {
+            paused: true,
+            song: String::from_str("Not Playing").unwrap(),
+            volume: 100,
+            display,
+        }
+    }
+
+    pub fn sleep(&mut self) {
+        info!("[Display] not being used, going to sleep");
+        self.display.sleep();
+    }
+
+    pub fn wake(&mut self) {
+        self.display.wake();
+    }
+
+    pub fn deep_sleep(&mut self) {
+        info!("[Display] entering deep sleep");
+        self.display.deep_sleep();
+    }
+
+    pub fn wake_deep(&mut self) {
+        self.display.wake_deep();
+    }
+
+    pub fn center_str(&mut self, text: &str) {
+        Text::new(
+            text,
+            Point::new(100, 100),
+            MonoTextStyle::new(&FONT_10X20, Rgb565::BLACK),
+        )
+        .draw(&mut self.display.display)
+        .unwrap();
+    }
+}
+
+pub type DISPLAY<'a> = MipiDisplay<
+    SpiInterface<
+        'a,
+        ExclusiveDevice<Spi<'static, SPI1, Blocking>, Output<'static>, Delay>,
+        Output<'static>,
+    >,
+    ST7789,
+    NoResetPin,
+>;
+
+pub struct Display<'a> {
+    pwr: Output<'static>,
+    display: DISPLAY<'a>,
+}
+
+impl<'a> Display<'a> {
+    // ST7789 TFT Display diamentions
+    pub const W: i32 = 320;
+    pub const H: i32 = 240;
+
+    pub fn new(
+        mut pwr: Output<'static>,
+        spi: SPI1,
+        clk: PIN_10,
+        mosi: PIN_11,
+        dc: Output<'static>,
+        cs: Output<'static>,
+        buffer: &'a mut [u8],
+    ) -> Self {
+        pwr.set_slew_rate(embassy_rp::gpio::SlewRate::Fast);
+        pwr.set_high();
+        let mut config = spi::Config::default();
+        config.frequency = 2_000_000;
+        let spi = Spi::new_blocking_txonly(spi, clk, mosi, config);
+        let spi_dev = ExclusiveDevice::new(spi, cs, Delay);
+        let interface = SpiInterface::new(spi_dev, dc, buffer);
+        let orientation = Orientation::new().rotate(mipidsi::options::Rotation::Deg90);
+        let display = mipidsi::Builder::new(ST7789, interface)
+            .orientation(orientation)
+            .display_size(Self::H as u16, Self::W as u16)
+            .invert_colors(ColorInversion::Inverted)
+            .init(&mut Delay)
+            .unwrap();
+        Self { pwr, display }
+    }
+
+    fn wake(&mut self) {
+        self.display.wake(&mut Delay).unwrap()
+    }
+
+    fn sleep(&mut self) {
+        self.display.sleep(&mut Delay).unwrap()
+    }
+
+    fn wake_deep(&mut self) {
+        self.pwr.set_high();
+    }
+
+    fn deep_sleep(&mut self) {
+        self.pwr.set_low();
+    }
+}
 
 /// Noop `OutputPin` implementation.
 ///
@@ -42,111 +152,4 @@ impl embedded_hal::digital::OutputPin for NoCs {
 
 impl embedded_hal::digital::ErrorType for NoCs {
     type Error = core::convert::Infallible;
-}
-
-pub type DISPLAY = Display<
-    SpiInterface<
-        'static,
-        ExclusiveDevice<Spi<'static, SPI1, Blocking>, Output<'static>, Delay>,
-        Output<'static>,
-    >,
-    ST7789,
-    NoResetPin,
->;
-
-pub struct MediaUi {
-    display: DISPLAY,
-    backlight: Output<'static>,
-    pub paused: bool,
-    pub song: String<SONG_NAME_LEN>,
-    pub volume: u8,
-}
-
-impl MediaUi {
-    const VOLUME: u8 = 0;
-    const SONG: u8 = 2;
-    const MEDIA_CONTROLS: u8 = 3;
-
-    // Text
-    const char_w: u8 = 10;
-    const char_h: u8 = 20;
-
-    pub fn new(mut display: DISPLAY, backlight: Output<'static>) -> Self {
-        display.clear(Rgb565::WHITE).unwrap();
-        Self {
-            display,
-            backlight,
-            paused: true,
-            song: String::from_str("Not Playing").unwrap(),
-            volume: 100,
-        }
-    }
-
-    pub fn sleep(&mut self) {
-        self.backlight.set_low();
-        self.display.clear(Rgb565::BLACK).unwrap();
-        self.display.sleep(&mut Delay).unwrap();
-    }
-
-    pub fn wake(&mut self) {
-        self.backlight.set_high();
-        self.display.clear(Rgb565::WHITE).unwrap();
-    }
-
-    pub fn destroy(self) -> (DISPLAY, Output<'static>) {
-        (self.display, self.backlight)
-    }
-
-    pub fn center_str(&mut self, text: &str) {
-        if let Err(e) = Text::new(
-            text,
-            Point::new(100, 100),
-            MonoTextStyle::new(&FONT_10X20, Rgb565::RED),
-        )
-        .draw(&mut self.display)
-        {
-            error!("Could not write to display",)
-        }
-    }
-
-    // fn center_int(&self, num: u8) -> u8 {
-    //     let (width, _height) = self.display.dimensions();
-    //     let width = width / 8;
-
-    //     if num < 10 {
-    //         (width - num as u8) / 2
-    //     } else if num < 100 {
-    //         (width - 2 as u8) / 2
-    //     } else {
-    //         (width - 3 as u8) / 2
-    //     }
-    // }
-
-    // fn center_width(&self, item_width: u8) -> u8 {
-    //     let (width, _height) = self.display.dimensions();
-    //     let width = width / 8;
-
-    //     (width - item_width) / 2
-    // }
-
-    // pub fn draw(&mut self) {
-    //     self.display
-    //         .set_position(self.center_int(self.volume), Self::VOLUME)
-    //         .unwrap();
-    //     let vol = [self.volume];
-    //     self.display
-    //         .write_str(unsafe { core::str::from_utf8_unchecked(&vol) })
-    //         .unwrap();
-    //     self.display.write_str("%").unwrap();
-
-    //     self.display
-    //         .set_position(self.center_str(&self.song), Self::SONG)
-    //         .unwrap();
-    //     self.display.write_str(&self.song).unwrap();
-
-    //     self.display
-    //         .set_position(self.center_width(5), Self::MEDIA_CONTROLS)
-    //         .unwrap();
-    //     self.display.write_str("B P N").unwrap();
-    // }
 }
