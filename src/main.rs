@@ -85,14 +85,12 @@ async fn main(_spawner: Spawner) {
 
     let mut media_ui = MediaUi::new(display);
     media_ui.init();
-    Timer::after_secs(2).await;
 
-    let mut progress = 0;
-    while progress < 100 {
-        media_ui.draw_played(progress);
-        progress += 1;
-        Timer::after_secs(2).await;
-    }
+    // loop {
+    //     let file = music_dir
+    //         .open_file_in_dir("test.wav", Mode::ReadOnly)
+    //         .unwrap();
+    //     let mut wav = Wav::new(file).unwrap();
 
     // // spawning ui and io task
     // spawn_core1(
@@ -105,31 +103,46 @@ async fn main(_spawner: Spawner) {
     //     },
     // );
 
-    // // Set up SPI0 for the Micro SD reader
-    // let sdcard = {
-    //     let mut config = spi::Config::default();
-    //     config.frequency = 400_000;
-    //     let spi = spi::Spi::new_blocking(p.SPI0, p.PIN_2, p.PIN_3, p.PIN_4, config);
-    //     // Use a dummy cs pin here, for embedded-hal SpiDevice compatibility reasons
-    //     let spi_dev = ExclusiveDevice::new_no_delay(spi, DummyCsPin);
-    //     // Real cs pin
-    //     let cs = Output::new(p.PIN_5, Level::High);
+    // Set up SPI0 for the Micro SD reader
+    let sdcard = {
+        let mut config = spi::Config::default();
+        config.frequency = 400_000;
+        let spi = spi::Spi::new_blocking(p.SPI0, p.PIN_2, p.PIN_3, p.PIN_4, config);
+        // Use a dummy cs pin here, for embedded-hal SpiDevice compatibility reasons
+        let spi_dev = ExclusiveDevice::new_no_delay(spi, DummyCsPin);
+        // Real cs pin
+        let cs = Output::new(p.PIN_5, Level::High);
 
-    //     let sdcard = SdCard::new(spi_dev, cs, embassy_time::Delay);
-    //     // Now that the card is initialized, the SPI clock can go faster
-    //     let mut config = spi::Config::default();
-    //     config.frequency = 16_000_000;
-    //     sdcard.spi(|dev| dev.bus_mut().set_config(&config));
-    //     sdcard
-    // };
+        let sdcard = SdCard::new(spi_dev, cs, embassy_time::Delay);
+        // Now that the card is initialized, the SPI clock can go faster
+        let mut config = spi::Config::default();
+        config.frequency = 16_000_000;
+        sdcard.spi(|dev| dev.bus_mut().set_config(&config));
+        sdcard
+    };
+
+    while let Err(_) = sdcard.num_bytes() {
+        info!("Sdcard not found, looking again in 1 second");
+        Timer::after_secs(1).await;
+    }
+    info!("sd size:{}", sdcard.num_bytes().unwrap());
+
+    let mut volume_mgr = VolumeManager::new(sdcard, storage::DummyTimesource());
+    let mut volume0 = volume_mgr.open_volume(VolumeIdx(0)).unwrap();
+    let mut root_dir = volume0.open_root_dir().unwrap();
+    let mut music_dir = root_dir.open_dir("music").unwrap();
+    info!("reading test file");
+
+    storage::read_wav(&mut music_dir, "test.wav", async |mut wav| {
+        let samples = wav.next_n::<10>().unwrap();
+        // write samples to bt and/or dac
+    })
+    .await;
 
     // // spawning compute task
     // let executor0 = EXECUTOR0.init(Executor::new());
     // executor0.run(|spawner| unwrap!(spawner.spawn(core0_task(sdcard))));
 }
-
-const DATASIZE: usize = 64;
-static CHANNEL: Channel<CriticalSectionRawMutex, wavv::DataBulk<DATASIZE>, 5> = Channel::new();
 
 // // Ui and media playback
 // #[embassy_executor::task]
@@ -199,40 +212,6 @@ static CHANNEL: Channel<CriticalSectionRawMutex, wavv::DataBulk<DATASIZE>, 5> = 
 //     //             dac.set_dac_fast(PowerDown::Normal, sample.into()).ok();
 //     //             Timer::after(Duration::from_hz(8000)).await;
 //     //         }
-//     //     }
-//     // }
-// }
-
-// // File system & Decoding
-// #[embassy_executor::task]
-// async fn core0_task(sdcard: storage::SD) {
-//     info!("hello from core 1");
-//     while let Err(_) = sdcard.num_bytes() {
-//         info!("Sdcard not found, looking again in 1 second");
-//         Timer::after_secs(1).await;
-//     }
-//     info!("sd size:{}", sdcard.num_bytes().unwrap());
-
-//     let mut volume_mgr = VolumeManager::new(sdcard, storage::DummyTimesource());
-//     let mut volume0 = volume_mgr.open_volume(VolumeIdx(0)).unwrap();
-//     let mut root_dir = volume0.open_root_dir().unwrap();
-//     let mut music_dir = root_dir.open_dir("music").unwrap();
-//     info!("reading test file");
-
-//     // loop {
-//     //     let file = music_dir
-//     //         .open_file_in_dir("test.wav", Mode::ReadOnly)
-//     //         .unwrap();
-//     //     let mut wav = Wav::new(file).unwrap();
-//     //     info!("[Library] Wav size: {}", wav.data.end);
-//     //     info!(
-//     //         "File Info:\nsample_rate: {}, num_channels: {}, bit_depth: {}",
-//     //         wav.fmt.sample_rate, wav.fmt.num_channels, wav.fmt.bit_depth
-//     //     );
-
-//     //     while !wav.is_end() {
-//     //         let samples = wav.next_n::<DATASIZE>().unwrap();
-//     //         CHANNEL.send(samples).await;
 //     //     }
 //     // }
 // }
