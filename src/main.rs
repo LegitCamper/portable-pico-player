@@ -1,109 +1,62 @@
 #![no_std]
 #![no_main]
-#![feature(async_trait_bounds)]
 
+#[cfg(feature = "bluetooth")]
 use bt_hci::controller::ExternalController;
-use core::f32::consts::PI;
+#[cfg(feature = "bluetooth")]
+use embassy_futures::select::select;
+use embedded_hal::delay::DelayNs;
+use embedded_sdmmc::{BlockDevice, Mode, VolumeIdx, VolumeManager};
+use mipidsi::interface::SpiInterface;
+use mipidsi::models::ST7789;
+use mipidsi::options::{ColorInversion, Orientation};
+#[cfg(feature = "bluetooth")]
+use trouble_host::{Address, Host, HostResources};
+
 use cyw43_pio::PioSpi;
 use defmt::*;
-use embassy_executor::Spawner;
-use embassy_futures::{join::join, select::select};
+use display::{Display, MediaUi};
+use embassy_executor::{Executor, Spawner};
+use embassy_rp::bind_interrupts;
 use embassy_rp::gpio::{Level, Output};
 use embassy_rp::i2c;
-use embassy_rp::peripherals::{DMA_CH0, I2C0, I2C1, PIO0, PIO1};
+use embassy_rp::multicore::{Stack, spawn_core1};
+use embassy_rp::peripherals::{DMA_CH2, I2C0, I2C1, PIN_2, PIN_3, PIN_4, PIN_5, PIO0, PIO1, SPI0};
 use embassy_rp::pio::{self, Pio};
-use embassy_rp::pwm::{Pwm, SetDutyCycle};
-use embassy_rp::spi;
-use embassy_rp::{bind_interrupts, pwm};
-use embassy_sync::blocking_mutex::raw::NoopRawMutex;
-use embassy_time::Timer;
-use embedded_hal_bus::spi::ExclusiveDevice;
+use embassy_rp::spi::{self, Spi};
+use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
+use embassy_sync::channel::Channel;
+use embassy_time::{Delay, Duration, Timer};
+use embedded_hal_bus::spi::{ExclusiveDevice, NoDelay};
 use embedded_sdmmc::sdcard::{DummyCsPin, SdCard};
-use heapless::Vec;
-use libm::sinf;
 use static_cell::StaticCell;
-// use trouble_host::{HostResources, prelude::*};
-use {defmt_rtt as _, embassy_time as _, panic_probe as _};
+use wavv::{DataBulk, Wav};
+use {defmt_rtt as _, panic_probe as _};
 
-mod aux;
-// mod ble;
+#[cfg(feature = "bluetooth")]
+mod ble;
 mod display;
-use display::display_task;
 mod storage;
 
+static mut CORE1_STACK: Stack<4096> = Stack::new();
+static EXECUTOR0: StaticCell<Executor> = StaticCell::new();
+static EXECUTOR1: StaticCell<Executor> = StaticCell::new();
+
 bind_interrupts!(struct Irqs {
-    PIO0_IRQ_0 => pio::InterruptHandler<PIO0>;
-    I2C0_IRQ => i2c::InterruptHandler<I2C0>;
+    // bluetooth
     PIO1_IRQ_0 => pio::InterruptHandler<PIO1>;
-    I2C1_IRQ => i2c::InterruptHandler<I2C1>;
 });
 
-#[embassy_executor::task]
-async fn cyw43_task(
-    runner: cyw43::Runner<'static, Output<'static>, PioSpi<'static, PIO0, 0, DMA_CH0>>,
-) -> ! {
-    runner.run().await
-}
-
+// #[cortex_m_rt::entry]
 #[embassy_executor::main]
-async fn main(spawner: Spawner) {
-    embassy_rp::pac::SIO.spinlock(31).write_value(1);
+async fn main(_spawner: Spawner) {
     let p = embassy_rp::init(Default::default());
 
-    // Set up I2C0 for the SSD1306 OLED Display
-    let i2c0 = i2c::I2c::new_async(p.I2C0, p.PIN_1, p.PIN_0, Irqs, i2c::Config::default());
-    unwrap!(spawner.spawn(display_task(i2c0)));
-
-    // Set up SPI0 for the Micro SD reader
-    let library = {
-        let mut config = spi::Config::default();
-        config.frequency = 1_00_000;
-        let spi = spi::Spi::new_blocking(p.SPI0, p.PIN_2, p.PIN_3, p.PIN_4, config);
-        // Use a dummy cs pin here, for embedded-hal SpiDevice compatibility reasons
-        let spi_dev = ExclusiveDevice::new_no_delay(spi, DummyCsPin);
-        // Real cs pin
-        let cs = Output::new(p.PIN_5, Level::High);
-
-        let sdcard = SdCard::new(spi_dev, cs, embassy_time::Delay);
-        info!("Card size is {} bytes", sdcard.num_bytes().unwrap());
-
-        // Now that the card is initialized, the SPI clock can go faster
-        let mut config = spi::Config::default();
-        config.frequency = 16_000_000;
-        sdcard.spi(|dev| dev.bus_mut().set_config(&config));
-
-        // unwrap!(spawner.spawn(storage_task(sdcard)));
-        storage::Library::new(sdcard)
-    };
-
-    // Set up I2C1 for the MCP4725 12-Bit DAC
-
-    let mut conf = i2c::Config::default();
-    conf.frequency = 1_000_000;
-    let i2c1 = i2c::I2c::new_async(p.I2C1, p.PIN_15, p.PIN_14, Irqs, conf);
-    unwrap!(spawner.spawn(aux::run(i2c1, library)));
-
-    // Sets up Bluetooth and Trouble
-    // {
-    //     // Release:
-    //     #[cfg(not(debug_assertions))]
-    //     let fw = include_bytes!("../cyw43-firmware/43439A0.bin");
-    //     #[cfg(not(debug_assertions))]
-    //     let clm = include_bytes!("../cyw43-firmware/43439A0_clm.bin");
-    //     #[cfg(not(debug_assertions))]
-    //     let btfw = include_bytes!("../cyw43-firmware/43439A0_btfw.bin");
-
-    //     // Dev
-    //     #[cfg(debug_assertions)]
-    //     let fw = unsafe { core::slice::from_raw_parts(0x10100000 as *const u8, 224190) };
-    //     #[cfg(debug_assertions)]
-    //     let clm = unsafe { core::slice::from_raw_parts(0x10140000 as *const u8, 4752) };
-    //     #[cfg(debug_assertions)]
-    //     let btfw = unsafe { core::slice::from_raw_parts(0x10141400 as *const u8, 6164) };
-
+    // // Sets up Bluetooth and Trouble
+    // let (spi, pwr) = {
     //     let pwr = Output::new(p.PIN_23, Level::Low);
     //     let cs = Output::new(p.PIN_25, Level::High);
-    //     let mut pio = Pio::new(p.PIO0, Irqs);
+    //     let mut pio = Pio::new(p.PIO1, Irqs);
     //     let spi = PioSpi::new(
     //         &mut pio.common,
     //         pio.sm0,
@@ -112,28 +65,153 @@ async fn main(spawner: Spawner) {
     //         cs,
     //         p.PIN_24,
     //         p.PIN_29,
-    //         p.DMA_CH0,
+    //         p.DMA_CH2,
     //     );
+    //     (spi, pwr)
+    // };
 
-    //     static STATE: StaticCell<cyw43::State> = StaticCell::new();
-    //     let state = STATE.init(cyw43::State::new());
-    //     let (_net_device, bt_device, mut control, runner) =
-    //         cyw43::new_with_bluetooth(state, pwr, spi, fw, btfw).await;
-    //     unwrap!(spawner.spawn(cyw43_task(runner)));
-    //     control.init(clm).await;
-    //     let controller: ble::ControllerT = ExternalController::new(bt_device);
+    // Set up SPI1 for ST7789 TFT Display
+    let mut buffer = [0u8; 4096];
+    let display = Display::new(
+        Output::new(p.PIN_15, Level::High),
+        p.SPI1,
+        p.PIN_10,
+        p.PIN_11,
+        Output::new(p.PIN_13, Level::Low),
+        Output::new(p.PIN_14, Level::Low),
+        &mut buffer,
+    );
+    Timer::after_secs(4).await;
 
-    //     let address: Address = Address::random([0xff, 0x8f, 0x1b, 0x05, 0xe4, 0xff]);
-    //     static RESOURCES: StaticCell<ble::Resources> = StaticCell::new();
-    //     let stack = trouble_host::new(controller, RESOURCES.init(HostResources::new()))
-    //         .set_random_address(address);
-    //     let Host {
-    //         central,
-    //         mut runner,
-    //         peripheral,
-    //         ..
-    //     } = stack.build();
+    let mut media_ui = MediaUi::new(display);
+    media_ui.init();
 
-    //     ble::run(&mut runner, central, peripheral).await;
-    // }
+    // loop {
+    //     let file = music_dir
+    //         .open_file_in_dir("test.wav", Mode::ReadOnly)
+    //         .unwrap();
+    //     let mut wav = Wav::new(file).unwrap();
+
+    // // spawning ui and io task
+    // spawn_core1(
+    //     p.CORE1,
+    //     unsafe { &mut *core::ptr::addr_of_mut!(CORE1_STACK) },
+    //     move || {
+    //         let executor1 = EXECUTOR1.init(Executor::new());
+    //         executor1
+    //             .run(|spawner| unwrap!(spawner.spawn(core1_task(display, backlight, pwr, spi))));
+    //     },
+    // );
+
+    // Set up SPI0 for the Micro SD reader
+    let sdcard = {
+        let mut config = spi::Config::default();
+        config.frequency = 400_000;
+        let spi = spi::Spi::new_blocking(p.SPI0, p.PIN_2, p.PIN_3, p.PIN_4, config);
+        // Use a dummy cs pin here, for embedded-hal SpiDevice compatibility reasons
+        let spi_dev = ExclusiveDevice::new_no_delay(spi, DummyCsPin);
+        // Real cs pin
+        let cs = Output::new(p.PIN_5, Level::High);
+
+        let sdcard = SdCard::new(spi_dev, cs, embassy_time::Delay);
+        // Now that the card is initialized, the SPI clock can go faster
+        let mut config = spi::Config::default();
+        config.frequency = 16_000_000;
+        sdcard.spi(|dev| dev.bus_mut().set_config(&config));
+        sdcard
+    };
+
+    while let Err(_) = sdcard.num_bytes() {
+        info!("Sdcard not found, looking again in 1 second");
+        Timer::after_secs(1).await;
+    }
+    info!("sd size:{}", sdcard.num_bytes().unwrap());
+
+    let mut volume_mgr = VolumeManager::new(sdcard, storage::DummyTimesource());
+    let mut volume0 = volume_mgr.open_volume(VolumeIdx(0)).unwrap();
+    let mut root_dir = volume0.open_root_dir().unwrap();
+    let mut music_dir = root_dir.open_dir("music").unwrap();
+    info!("reading test file");
+
+    storage::read_wav(&mut music_dir, "test.wav", async |mut wav| {
+        let samples = wav.next_n::<10>().unwrap();
+        // write samples to bt and/or dac
+    })
+    .await;
+
+    // // spawning compute task
+    // let executor0 = EXECUTOR0.init(Executor::new());
+    // executor0.run(|spawner| unwrap!(spawner.spawn(core0_task(sdcard))));
 }
+
+// // Ui and media playback
+// #[embassy_executor::task]
+// async fn core1_task(
+//     mut display: display::DISPLAY,
+//     backlight: Output<'static>,
+//     // mut dac: MCP4725<i2c::I2c<'static, I2C1, i2c::Async>>,
+//     pwr: Output<'static>,
+//     spi: PioSpi<'static, PIO1, 0, DMA_CH2>,
+// ) {
+//     info!("hello from core 0");
+
+//     let mut media_ui = Display::new(display, backlight);
+//     media_ui.center_str("Loading...");
+//     Timer::after_secs(2).await;
+//     // media_ui.sleep();
+
+//     // Configure bluetooth
+//     #[cfg(feature = "bluetooth")]
+//     {
+//         // Release:
+//         #[cfg(not(debug_assertions))]
+//         let (fw, clm, btfw) = (
+//             include_bytes!("../cyw43-firmware/43439A0.bin"),
+//             include_bytes!("../cyw43-firmware/43439A0_clm.bin"),
+//             include_bytes!("../cyw43-firmware/43439A0_btfw.bin"),
+//         );
+
+//         // Dev
+//         #[cfg(debug_assertions)]
+//         let (fw, clm, btfw) = (
+//             unsafe { core::slice::from_raw_parts(0x10100000 as *const u8, 224190) },
+//             unsafe { core::slice::from_raw_parts(0x10140000 as *const u8, 4752) },
+//             unsafe { core::slice::from_raw_parts(0x10141400 as *const u8, 6164) },
+//         );
+
+//         static STATE: StaticCell<cyw43::State> = StaticCell::new();
+//         let state = STATE.init(cyw43::State::new());
+//         let (_net_device, bt_device, mut control, runner) =
+//             cyw43::new_with_bluetooth(state, pwr, spi, fw, btfw).await;
+//         control.init(clm).await;
+//         let controller: ble::ControllerT = ExternalController::new(bt_device);
+
+//         let address: Address = Address::random([0xff, 0x8f, 0x1b, 0x05, 0xe4, 0xff]);
+//         static RESOURCES: StaticCell<ble::Resources> = StaticCell::new();
+//         let stack = trouble_host::new(controller, RESOURCES.init(HostResources::new()))
+//             .set_random_address(address);
+//         let Host {
+//             central,
+//             mut runner,
+//             peripheral,
+//             ..
+//         } = stack.build();
+
+//         select(
+//             runner.run(),
+//             ble::run(&mut runner, central, peripheral).await,
+//         )
+//         .await;
+//     }
+
+//     // info!("playing music");
+//     // loop {
+//     //     let samples = CHANNEL.receive().await;
+//     //     if let DataBulk::BitDepth8(samples) = samples {
+//     //         for sample in samples {
+//     //             dac.set_dac_fast(PowerDown::Normal, sample.into()).ok();
+//     //             Timer::after(Duration::from_hz(8000)).await;
+//     //         }
+//     //     }
+//     // }
+// }
