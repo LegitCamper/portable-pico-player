@@ -1,10 +1,18 @@
 #![no_std]
 #![no_main]
 
+use core::mem;
+
 #[cfg(feature = "bluetooth")]
 use bt_hci::controller::ExternalController;
 #[cfg(feature = "bluetooth")]
 use embassy_futures::select::select;
+use embassy_rp::pio_programs::i2s::{PioI2sOut, PioI2sOutProgram};
+use embedded_hal::delay::DelayNs;
+use embedded_sdmmc::{BlockDevice, Mode, VolumeIdx, VolumeManager};
+use mipidsi::interface::SpiInterface;
+use mipidsi::models::ST7789;
+use mipidsi::options::{ColorInversion, Orientation};
 #[cfg(feature = "bluetooth")]
 use trouble_host::{Address, Host, HostResources};
 
@@ -36,10 +44,6 @@ mod ble;
 mod display;
 mod storage;
 
-static mut CORE1_STACK: Stack<4096> = Stack::new();
-static EXECUTOR0: StaticCell<Executor> = StaticCell::new();
-static EXECUTOR1: StaticCell<Executor> = StaticCell::new();
-
 bind_interrupts!(struct Irqs {
     // i2s
     PIO0_IRQ_0 => pio::InterruptHandler<PIO0>;
@@ -50,7 +54,7 @@ bind_interrupts!(struct Irqs {
 // #[cortex_m_rt::entry]
 #[embassy_executor::main]
 async fn main(_spawner: Spawner) {
-    let p = embassy_rp::init(Default::default());
+    let mut p = embassy_rp::init(Default::default());
 
     // // Sets up Bluetooth and Trouble
     // let (spi, pwr) = {
@@ -118,27 +122,94 @@ async fn main(_spawner: Spawner) {
         sdcard
     };
 
-    while let Err(_) = sdcard.num_bytes() {
-        info!("Sdcard not found, looking again in 1 second");
-        Timer::after_secs(1).await;
-    }
-    info!("sd size:{}", sdcard.num_bytes().unwrap());
+    // while let Err(_) = sdcard.num_bytes() {
+    //     info!("Sdcard not found, looking again in 1 second");
+    //     Timer::after_secs(1).await;
+    // }
+    // info!("sd size:{}", sdcard.num_bytes().unwrap());
 
-    let mut volume_mgr = VolumeManager::new(sdcard, storage::DummyTimesource());
-    let mut volume0 = volume_mgr.open_volume(VolumeIdx(0)).unwrap();
-    let mut root_dir = volume0.open_root_dir().unwrap();
-    let mut music_dir = root_dir.open_dir("music").unwrap();
-    info!("reading test file");
+    // let mut volume_mgr = VolumeManager::new(sdcard, storage::DummyTimesource());
+    // let mut volume0 = volume_mgr.open_volume(VolumeIdx(0)).unwrap();
+    // let mut root_dir = volume0.open_root_dir().unwrap();
+    // let mut music_dir = root_dir.open_dir("music").unwrap();
+    // info!("reading test file");
 
-    storage::read_wav(&mut music_dir, "test.wav", async |mut wav| {
-        let samples = wav.next_n::<10>().unwrap();
-        // write samples to bt and/or dac
-    })
-    .await;
+    // storage::read_wav(&mut music_dir, "test.wav", async |mut wav| {
+    //     let samples = wav.next_n::<10>().unwrap();
+    //     // write samples to bt and/or dac
+    // })
+    // .await;
 
     // // spawning compute task
     // let executor0 = EXECUTOR0.init(Executor::new());
     // executor0.run(|spawner| unwrap!(spawner.spawn(core0_task(sdcard))));
+
+    // i2s DAC
+    {
+        const SAMPLE_RATE: u32 = 48_000;
+        const BIT_DEPTH: u32 = 16;
+        const CHANNELS: u32 = 2;
+
+        // Setup pio state machine for i2s output
+        let Pio {
+            mut common, sm0, ..
+        } = Pio::new(p.PIO0, Irqs);
+
+        let bit_clock_pin = p.PIN_18;
+        let left_right_clock_pin = p.PIN_19;
+        let data_pin = p.PIN_20;
+
+        let program = PioI2sOutProgram::new(&mut common);
+        let mut i2s = PioI2sOut::new(
+            &mut common,
+            sm0,
+            p.DMA_CH0,
+            data_pin,
+            bit_clock_pin,
+            left_right_clock_pin,
+            SAMPLE_RATE,
+            BIT_DEPTH,
+            CHANNELS,
+            &program,
+        );
+
+        // create two audio buffers (back and front) which will take turns being
+        // filled with new audio data and being sent to the pio fifo using dma
+        const BUFFER_SIZE: usize = 960;
+        static DMA_BUFFER: StaticCell<[u32; BUFFER_SIZE * 2]> = StaticCell::new();
+        let dma_buffer = DMA_BUFFER.init_with(|| [0u32; BUFFER_SIZE * 2]);
+        let (mut back_buffer, mut front_buffer) = dma_buffer.split_at_mut(BUFFER_SIZE);
+
+        // start pio state machine
+        let mut fade_value: i32 = 0;
+        let mut phase: i32 = 0;
+
+        loop {
+            // trigger transfer of front buffer data to the pio fifo
+            // but don't await the returned future, yet
+            let dma_future = i2s.write(front_buffer);
+
+            // fade in audio when bootsel is pressed
+            let fade_target = if p.BOOTSEL.is_pressed() { i32::MAX } else { 0 };
+
+            // fill back buffer with fresh audio samples before awaiting the dma future
+            for s in back_buffer.iter_mut() {
+                // exponential approach of fade_value => fade_target
+                fade_value += (fade_target - fade_value) >> 14;
+                // generate triangle wave with amplitude and frequency based on fade value
+                phase = (phase + (fade_value >> 22)) & 0xffff;
+                let triangle_sample = (phase as i16 as i32).abs() - 16384;
+                let sample = (triangle_sample * (fade_value >> 15)) >> 16;
+                // duplicate mono sample into lower and upper half of dma word
+                *s = (sample as u16 as u32) * 0x10001;
+            }
+
+            // now await the dma future. once the dma finishes, the next buffer needs to be queued
+            // within DMA_DEPTH / SAMPLE_RATE = 8 / 48000 seconds = 166us
+            dma_future.await;
+            mem::swap(&mut back_buffer, &mut front_buffer);
+        }
+    }
 }
 
 // // Ui and media playback
