@@ -732,6 +732,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "embedded-sdmmc-async"
+version = "0.4.0"
+source = "git+https://github.com/ninjasource/embedded-sdmmc-rs.git?branch=add-async-support#eabe82319b1af0d69792903c7f650063c28b533a"
+dependencies = [
+ "byteorder",
+ "defmt",
+ "embedded-hal-async",
+]
+
+[[package]]
 name = "embedded-storage"
 version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1783,8 +1793,9 @@ dependencies = [
  "embedded-graphics",
  "embedded-graphics-core",
  "embedded-hal 1.0.0",
+ "embedded-hal-async",
  "embedded-hal-bus",
- "embedded-sdmmc",
+ "embedded-sdmmc-async",
  "format_no_std",
  "futures",
  "heapless 0.8.0",

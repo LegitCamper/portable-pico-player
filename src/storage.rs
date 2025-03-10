@@ -1,73 +1,143 @@
-use core::ops::AsyncFnMut;
-
-use defmt::*;
-use embassy_rp::gpio::Output;
-use embassy_rp::peripherals::SPI0;
-use embassy_rp::spi::{self, Spi};
-use embassy_sync::blocking_mutex::raw::RawMutex;
-use embassy_sync::mutex::Mutex;
-use embassy_time::Delay;
-use embedded_hal_bus::spi::{ExclusiveDevice, NoDelay};
-use embedded_sdmmc::sdcard::DummyCsPin;
-use embedded_sdmmc::{
-    DirEntry, Directory, File, Mode, SdCard, TimeSource, Timestamp, Volume, VolumeIdx,
-    VolumeManager,
+use defmt::info;
+use embassy_rp::gpio::{Level, Output};
+use embassy_rp::spi::Spi;
+use embedded_hal::digital::OutputPin;
+use embedded_hal_async::spi::SpiBus;
+use embedded_sdmmc_async::{
+    BlockDevice, Controller, Directory, File, Mode, TimeSource, Timestamp, Volume, VolumeIdx,
 };
-use heapless::Vec;
-use wavv::Wav;
 
-pub struct DummyTimesource();
+const SD_CARD_CHUNK_LEN: usize = 512;
 
-impl TimeSource for DummyTimesource {
+pub struct FileReader<'a, SPI, CS>
+where
+    SPI: SpiBus<u8>,
+    CS: OutputPin,
+{
+    file_buffer: [u8; SD_CARD_CHUNK_LEN],
+    sd_controller: Controller<Spi<'a, SPI, CS>, DummyTimeSource>,
+    file: Option<File>,
+    volume: Option<Volume>,
+    dir: Option<Directory>,
+    read_index: usize,
+    file_name: &'static str,
+}
+
+struct DummyTimeSource {}
+impl TimeSource for DummyTimeSource {
     fn get_timestamp(&self) -> Timestamp {
-        Timestamp {
-            year_since_1970: 0,
-            zero_indexed_month: 0,
-            zero_indexed_day: 0,
-            hours: 0,
-            minutes: 0,
-            seconds: 0,
+        Timestamp::from_calendar(2022, 1, 1, 0, 0, 0).unwrap()
+    }
+}
+
+impl<'a, SPI, CS> FileReader<'a, SPI, CS>
+where
+    SPI: SpiBus<u8>,
+    CS: OutputPin,
+{
+    pub fn new(block_device: BlockSpi<'a, SPI, CS>, file_name: &'static str) -> Self {
+        let timesource = DummyTimeSource {};
+        let sd_controller = Controller::new(block_device, timesource);
+        let file_buffer = [0u8; SD_CARD_CHUNK_LEN];
+
+        Self {
+            file_buffer,
+            sd_controller,
+            file: None,
+            volume: None,
+            dir: None,
+            read_index: 0,
+            file_name,
         }
     }
-}
 
-pub const MAX_DIRS: usize = 4;
-pub const MAX_FILES: usize = 4;
-pub const MAX_VOLUMES: usize = 1;
+    pub async fn open(&mut self) {
+        info!("read SD card success");
 
-pub type SD = SdCard<
-    ExclusiveDevice<spi::Spi<'static, SPI0, spi::Blocking>, DummyCsPin, NoDelay>,
-    Output<'static>,
-    Delay,
->;
+        let mut volume = match self.sd_controller.get_volume(VolumeIdx(0)).await {
+            Ok(volume) => volume,
+            Err(e) => {
+                panic!("Error getting volume: {:?}", e);
+            }
+        };
 
-pub struct Library<'a> {
-    directory: Directory<'a, SD, DummyTimesource, MAX_DIRS, MAX_FILES, MAX_VOLUMES>,
-}
-
-impl<'a> Library<'a> {
-    pub fn new(dir: Directory<'a, SD, DummyTimesource, MAX_DIRS, MAX_FILES, MAX_VOLUMES>) -> Self {
-        Self { directory: dir }
-    }
-
-    pub fn list_files(&mut self) -> Vec<DirEntry, MAX_FILES> {
-        let mut files: Vec<DirEntry, MAX_FILES> = Vec::new();
-        self.directory
-            .iterate_dir(|file| files.push(file.clone()).unwrap())
+        let dir = self.sd_controller.open_root_dir(&volume).unwrap();
+        let mut file = self
+            .sd_controller
+            .open_file_in_dir(&mut volume, &dir, self.file_name, Mode::ReadOnly)
+            .await
             .unwrap();
 
-        files
+        // fill the file_buffer
+        self.sd_controller
+            .read(&volume, &mut file, &mut self.file_buffer)
+            .await
+            .unwrap();
+
+        self.file = Some(file);
+        self.volume = Some(volume);
+        self.dir = Some(dir);
+        self.read_index = 0;
     }
-}
 
-pub async fn read_wav<'a>(
-    dir: &mut Directory<'a, SD, DummyTimesource, MAX_DIRS, MAX_FILES, MAX_VOLUMES>,
-    file: &str,
-    mut action: impl AsyncFnMut(Wav<SD, DummyTimesource, MAX_DIRS, MAX_FILES, MAX_VOLUMES>),
-) {
-    let file = dir.open_file_in_dir(file, Mode::ReadOnly).unwrap();
+    // this function fills the `into_buf` with bytes (the exact amount in the buffer)
+    // It reads the SD card in 512 KB chunks to prevent unecessary reads and keeps an
+    // internal buffer to cache bytes for the next read call
+    pub async fn read_exact(&mut self, into_buf: &mut [u8]) -> bool {
+        let volume = self.volume.as_ref().expect("file not open");
 
-    let wav = Wav::new(file).unwrap();
-    info!("[Library] Wav size: {}", wav.data.end);
-    action(wav).await
+        if into_buf.len() > self.file_buffer.len() {
+            panic!(
+                "into_buf len too large. Max len: {}",
+                self.file_buffer.len()
+            );
+        }
+
+        if (self.file_buffer.len() - self.read_index) >= into_buf.len() {
+            into_buf.copy_from_slice(
+                &self.file_buffer[self.read_index..(self.read_index + into_buf.len())],
+            );
+            self.read_index += into_buf.len();
+        } else {
+            let num_bytes = self.file_buffer.len() - self.read_index;
+            into_buf[..num_bytes].copy_from_slice(&self.file_buffer[self.read_index..]);
+
+            let mut file = self.file.take().unwrap();
+
+            // fill the file_buffer
+            let len = self
+                .sd_controller
+                .read(volume, &mut file, &mut self.file_buffer)
+                .await
+                .unwrap();
+            self.file = Some(file);
+
+            if len != SD_CARD_CHUNK_LEN {
+                // end of file reached, consume the file
+                info!("end of file");
+                self.close();
+                self.open().await;
+                return false;
+            }
+
+            let num_bytes_new = into_buf.len() - num_bytes;
+            into_buf[num_bytes..].copy_from_slice(&self.file_buffer[..num_bytes_new]);
+            self.read_index = num_bytes_new;
+        }
+
+        return true;
+    }
+
+    fn close(&mut self) {
+        if let Some(file) = self.file.take() {
+            self.sd_controller
+                .close_file(self.volume.as_ref().unwrap(), file)
+                .unwrap();
+        }
+
+        if let Some(dir) = self.dir.take() {
+            self.sd_controller
+                .close_dir(self.volume.as_ref().unwrap(), dir);
+        }
+    }
 }
