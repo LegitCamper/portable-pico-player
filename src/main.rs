@@ -5,11 +5,6 @@
 use bt_hci::controller::ExternalController;
 #[cfg(feature = "bluetooth")]
 use embassy_futures::select::select;
-use embedded_hal::delay::DelayNs;
-use embedded_sdmmc::{BlockDevice, Mode, VolumeIdx, VolumeManager};
-use mipidsi::interface::SpiInterface;
-use mipidsi::models::ST7789;
-use mipidsi::options::{ColorInversion, Orientation};
 #[cfg(feature = "bluetooth")]
 use trouble_host::{Address, Host, HostResources};
 
@@ -27,8 +22,11 @@ use embassy_rp::spi::{self, Spi};
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::channel::Channel;
 use embassy_time::{Delay, Duration, Timer};
+use embedded_hal::delay::DelayNs;
 use embedded_hal_bus::spi::{ExclusiveDevice, NoDelay};
-use embedded_sdmmc::sdcard::{DummyCsPin, SdCard};
+use mipidsi::interface::SpiInterface;
+use mipidsi::models::ST7789;
+use mipidsi::options::{ColorInversion, Orientation};
 use static_cell::StaticCell;
 use wavv::{DataBulk, Wav};
 use {defmt_rtt as _, panic_probe as _};
@@ -43,6 +41,8 @@ static EXECUTOR0: StaticCell<Executor> = StaticCell::new();
 static EXECUTOR1: StaticCell<Executor> = StaticCell::new();
 
 bind_interrupts!(struct Irqs {
+    // i2s
+    PIO0_IRQ_0 => pio::InterruptHandler<PIO0>;
     // bluetooth
     PIO1_IRQ_0 => pio::InterruptHandler<PIO1>;
 });
@@ -108,12 +108,9 @@ async fn main(_spawner: Spawner) {
         let mut config = spi::Config::default();
         config.frequency = 400_000;
         let spi = spi::Spi::new_blocking(p.SPI0, p.PIN_2, p.PIN_3, p.PIN_4, config);
-        // Use a dummy cs pin here, for embedded-hal SpiDevice compatibility reasons
-        let spi_dev = ExclusiveDevice::new_no_delay(spi, DummyCsPin);
-        // Real cs pin
         let cs = Output::new(p.PIN_5, Level::High);
 
-        let sdcard = SdCard::new(spi_dev, cs, embassy_time::Delay);
+        let sdcard = SdCard::new(spi, cs, embassy_time::Delay);
         // Now that the card is initialized, the SPI clock can go faster
         let mut config = spi::Config::default();
         config.frequency = 16_000_000;
