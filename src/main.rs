@@ -1,37 +1,29 @@
 #![no_std]
 #![no_main]
 
+use bbqueue::BBBuffer;
+use byteorder::{ByteOrder, LittleEndian};
+use core::default::Default;
 use core::mem;
-
-#[cfg(feature = "bluetooth")]
-use bt_hci::controller::ExternalController;
-#[cfg(feature = "bluetooth")]
-use embassy_futures::select::select;
-use embassy_rp::pio_programs::i2s::{PioI2sOut, PioI2sOutProgram};
-use embedded_hal::delay::DelayNs;
-use embedded_sdmmc::{BlockDevice, Mode, VolumeIdx, VolumeManager};
-use mipidsi::interface::SpiInterface;
-use mipidsi::models::ST7789;
-use mipidsi::options::{ColorInversion, Orientation};
-#[cfg(feature = "bluetooth")]
-use trouble_host::{Address, Host, HostResources};
-
 use cyw43_pio::PioSpi;
 use defmt::*;
 use display::{Display, MediaUi};
 use embassy_executor::{Executor, Spawner};
+use embassy_futures::select::select;
 use embassy_rp::bind_interrupts;
 use embassy_rp::gpio::{Level, Output};
 use embassy_rp::i2c;
 use embassy_rp::multicore::{Stack, spawn_core1};
 use embassy_rp::peripherals::{DMA_CH2, I2C0, I2C1, PIN_2, PIN_3, PIN_4, PIN_5, PIO0, PIO1, SPI0};
 use embassy_rp::pio::{self, Pio};
+use embassy_rp::pio_programs::i2s::{PioI2sOut, PioI2sOutProgram};
 use embassy_rp::spi::{self, Spi};
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::channel::Channel;
 use embassy_time::{Delay, Duration, Timer};
-use embedded_hal::delay::DelayNs;
-use embedded_hal_bus::spi::{ExclusiveDevice, NoDelay};
+use embedded_sdmmc_async::{BlockDevice, Mode, SdMmcSpi, VolumeIdx};
+use file_reader::FileReader;
+use heapless::Vec;
 use mipidsi::interface::SpiInterface;
 use mipidsi::models::ST7789;
 use mipidsi::options::{ColorInversion, Orientation};
@@ -39,10 +31,16 @@ use static_cell::StaticCell;
 use wavv::{DataBulk, Wav};
 use {defmt_rtt as _, panic_probe as _};
 
-#[cfg(feature = "bluetooth")]
-mod ble;
+// mod ble;
 mod display;
-mod storage;
+mod file_reader;
+
+const AUDIO_FRAME_BYTES_LEN: usize = NUM_SAMPLES * mem::size_of::<Sample>();
+const BB_BYTES_LEN: usize = AUDIO_FRAME_BYTES_LEN * 6;
+const NUM_SAMPLES: usize = 960; // for both left and right channels
+const FILE_FRAME_LEN: usize = 400; // containing 2 channels of audio
+static BB: BBBuffer<BB_BYTES_LEN> = BBBuffer::new();
+type Sample = i16;
 
 bind_interrupts!(struct Irqs {
     // i2s
@@ -51,28 +49,9 @@ bind_interrupts!(struct Irqs {
     PIO1_IRQ_0 => pio::InterruptHandler<PIO1>;
 });
 
-// #[cortex_m_rt::entry]
 #[embassy_executor::main]
-async fn main(_spawner: Spawner) {
+async fn main(spawner: Spawner) {
     let mut p = embassy_rp::init(Default::default());
-
-    // // Sets up Bluetooth and Trouble
-    // let (spi, pwr) = {
-    //     let pwr = Output::new(p.PIN_23, Level::Low);
-    //     let cs = Output::new(p.PIN_25, Level::High);
-    //     let mut pio = Pio::new(p.PIO1, Irqs);
-    //     let spi = PioSpi::new(
-    //         &mut pio.common,
-    //         pio.sm0,
-    //         cyw43_pio::DEFAULT_CLOCK_DIVIDER,
-    //         pio.irq0,
-    //         cs,
-    //         p.PIN_24,
-    //         p.PIN_29,
-    //         p.DMA_CH2,
-    //     );
-    //     (spi, pwr)
-    // };
 
     // Set up SPI1 for ST7789 TFT Display
     let mut buffer = [0u8; 4096];
@@ -90,59 +69,29 @@ async fn main(_spawner: Spawner) {
     let mut media_ui = MediaUi::new(display);
     media_ui.init();
 
-    // loop {
-    //     let file = music_dir
-    //         .open_file_in_dir("test.wav", Mode::ReadOnly)
-    //         .unwrap();
-    //     let mut wav = Wav::new(file).unwrap();
-
-    // // spawning ui and io task
-    // spawn_core1(
-    //     p.CORE1,
-    //     unsafe { &mut *core::ptr::addr_of_mut!(CORE1_STACK) },
-    //     move || {
-    //         let executor1 = EXECUTOR1.init(Executor::new());
-    //         executor1
-    //             .run(|spawner| unwrap!(spawner.spawn(core1_task(display, backlight, pwr, spi))));
-    //     },
-    // );
-
     // Set up SPI0 for the Micro SD reader
     let sdcard = {
         let mut config = spi::Config::default();
-        config.frequency = 400_000;
-        let spi = spi::Spi::new_blocking(p.SPI0, p.PIN_2, p.PIN_3, p.PIN_4, config);
+        config.frequency = 16_000_000;
+        let spi = spi::Spi::new(
+            p.SPI0,
+            p.PIN_2,
+            p.PIN_3,
+            p.PIN_4,
+            p.DMA_CH1,
+            p.DMA_CH2,
+            spi::Config::default(),
+        );
         let cs = Output::new(p.PIN_5, Level::High);
 
-        let sdcard = SdCard::new(spi, cs, embassy_time::Delay);
-        // Now that the card is initialized, the SPI clock can go faster
-        let mut config = spi::Config::default();
-        config.frequency = 16_000_000;
-        sdcard.spi(|dev| dev.bus_mut().set_config(&config));
-        sdcard
+        let mut sd_card = SdMmcSpi::new(spi, cs);
+        sd_card
     };
 
-    // while let Err(_) = sdcard.num_bytes() {
-    //     info!("Sdcard not found, looking again in 1 second");
-    //     Timer::after_secs(1).await;
-    // }
-    // info!("sd size:{}", sdcard.num_bytes().unwrap());
+    // used for sending data between tasks
+    let (producer, mut consumer) = BB.try_split().unwrap();
 
-    // let mut volume_mgr = VolumeManager::new(sdcard, storage::DummyTimesource());
-    // let mut volume0 = volume_mgr.open_volume(VolumeIdx(0)).unwrap();
-    // let mut root_dir = volume0.open_root_dir().unwrap();
-    // let mut music_dir = root_dir.open_dir("music").unwrap();
-    // info!("reading test file");
-
-    // storage::read_wav(&mut music_dir, "test.wav", async |mut wav| {
-    //     let samples = wav.next_n::<10>().unwrap();
-    //     // write samples to bt and/or dac
-    // })
-    // .await;
-
-    // // spawning compute task
-    // let executor0 = EXECUTOR0.init(Executor::new());
-    // executor0.run(|spawner| unwrap!(spawner.spawn(core0_task(sdcard))));
+    unwrap!(spawner.spawn(reader(sdcard, producer)));
 
     // i2s DAC
     {
@@ -180,28 +129,22 @@ async fn main(_spawner: Spawner) {
         let dma_buffer = DMA_BUFFER.init_with(|| [0u32; BUFFER_SIZE * 2]);
         let (mut back_buffer, mut front_buffer) = dma_buffer.split_at_mut(BUFFER_SIZE);
 
-        // start pio state machine
-        let mut fade_value: i32 = 0;
-        let mut phase: i32 = 0;
-
         loop {
             // trigger transfer of front buffer data to the pio fifo
             // but don't await the returned future, yet
             let dma_future = i2s.write(front_buffer);
 
-            // fade in audio when bootsel is pressed
-            let fade_target = if p.BOOTSEL.is_pressed() { i32::MAX } else { 0 };
-
             // fill back buffer with fresh audio samples before awaiting the dma future
             for s in back_buffer.iter_mut() {
-                // exponential approach of fade_value => fade_target
-                fade_value += (fade_target - fade_value) >> 14;
-                // generate triangle wave with amplitude and frequency based on fade value
-                phase = (phase + (fade_value >> 22)) & 0xffff;
-                let triangle_sample = (phase as i16 as i32).abs() - 16384;
-                let sample = (triangle_sample * (fade_value >> 15)) >> 16;
-                // duplicate mono sample into lower and upper half of dma word
-                *s = (sample as u16 as u32) * 0x10001;
+                // lock free read
+                match consumer.read() {
+                    Ok(read) => *s = u32::from_be_bytes(read.buf().try_into().unwrap()),
+                    Err(_) => {
+                        // decoding cannot keep up with playback speed - play silence instead
+                        info!("silence");
+                        *s = 0
+                    }
+                };
             }
 
             // now await the dma future. once the dma finishes, the next buffer needs to be queued
@@ -209,6 +152,54 @@ async fn main(_spawner: Spawner) {
             dma_future.await;
             mem::swap(&mut back_buffer, &mut front_buffer);
         }
+    }
+}
+
+#[embassy_executor::task]
+async fn reader(
+    mut sd_card: SdMmcSpi<Spi<'static, SPI0, spi::Async>, Output<'static>>,
+    mut producer: bbqueue::Producer<'static, BB_BYTES_LEN>,
+) {
+    let block_device = sd_card.acquire().await.unwrap();
+    let mut file_reader = FileReader::new(block_device, "test.wav");
+    file_reader.open().await;
+
+    let mut dec_in_buffer = [0; FILE_FRAME_LEN];
+    let mut dec_out_buffer = [0; NUM_SAMPLES / 2];
+
+    loop {
+        match producer.grant_exact(AUDIO_FRAME_BYTES_LEN) {
+            Ok(mut wgr) => {
+                // read a frame of audio data from the sd card
+                if !file_reader.read_exact(&mut dec_in_buffer).await {
+                    // start reading the file again
+                    info!("start reading the file again");
+                    continue;
+                }
+
+                // set num bytes to be committed (otherwise wgr.buf() may contain the wrong number of bytes)
+                wgr.to_commit(AUDIO_FRAME_BYTES_LEN);
+
+                // the pcm buffer (wgr) has L-R audio samples interleved
+                encode_to_out_buf(&dec_out_buffer, &mut wgr.buf()[2..]);
+            }
+            Err(_) => {
+                // input queue full, this is normal
+                // the i2s interrupt firing should free up space
+                Timer::after(Duration::from_micros(1000)).await;
+            }
+        }
+    }
+}
+
+fn encode_to_out_buf(decoder_buf: &[i16], pcm_buf: &mut [u8]) {
+    // take 2 bytes at a time and skip every second chunk
+    // we do this because this buffer is for stereo audio with L-R samples interleved
+    for (src, dst) in decoder_buf
+        .iter()
+        .zip(pcm_buf.chunks_exact_mut(2).step_by(2))
+    {
+        LittleEndian::write_i16(dst, *src);
     }
 }
 
@@ -227,50 +218,6 @@ async fn main(_spawner: Spawner) {
 //     media_ui.center_str("Loading...");
 //     Timer::after_secs(2).await;
 //     // media_ui.sleep();
-
-//     // Configure bluetooth
-//     #[cfg(feature = "bluetooth")]
-//     {
-//         // Release:
-//         #[cfg(not(debug_assertions))]
-//         let (fw, clm, btfw) = (
-//             include_bytes!("../cyw43-firmware/43439A0.bin"),
-//             include_bytes!("../cyw43-firmware/43439A0_clm.bin"),
-//             include_bytes!("../cyw43-firmware/43439A0_btfw.bin"),
-//         );
-
-//         // Dev
-//         #[cfg(debug_assertions)]
-//         let (fw, clm, btfw) = (
-//             unsafe { core::slice::from_raw_parts(0x10100000 as *const u8, 224190) },
-//             unsafe { core::slice::from_raw_parts(0x10140000 as *const u8, 4752) },
-//             unsafe { core::slice::from_raw_parts(0x10141400 as *const u8, 6164) },
-//         );
-
-//         static STATE: StaticCell<cyw43::State> = StaticCell::new();
-//         let state = STATE.init(cyw43::State::new());
-//         let (_net_device, bt_device, mut control, runner) =
-//             cyw43::new_with_bluetooth(state, pwr, spi, fw, btfw).await;
-//         control.init(clm).await;
-//         let controller: ble::ControllerT = ExternalController::new(bt_device);
-
-//         let address: Address = Address::random([0xff, 0x8f, 0x1b, 0x05, 0xe4, 0xff]);
-//         static RESOURCES: StaticCell<ble::Resources> = StaticCell::new();
-//         let stack = trouble_host::new(controller, RESOURCES.init(HostResources::new()))
-//             .set_random_address(address);
-//         let Host {
-//             central,
-//             mut runner,
-//             peripheral,
-//             ..
-//         } = stack.build();
-
-//         select(
-//             runner.run(),
-//             ble::run(&mut runner, central, peripheral).await,
-//         )
-//         .await;
-//     }
 
 //     // info!("playing music");
 //     // loop {

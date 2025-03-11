@@ -5,7 +5,6 @@ use embassy_rp::{
     peripherals::{PIN_10, PIN_11, SPI1},
     spi::{self, Blocking, Spi},
 };
-use embassy_sync::blocking_mutex::Mutex;
 use embassy_time::Delay;
 use embedded_graphics::{
     draw_target::DrawTarget,
@@ -216,7 +215,7 @@ impl<'a> Display<'a> {
         let mut config = spi::Config::default();
         config.frequency = 16_000_000;
         let spi = Spi::new_blocking_txonly(spi, clk, mosi, config);
-        let spi_dev = ExclusiveDevice::new(spi, cs, Delay);
+        let spi_dev = ExclusiveDevice::new(spi, cs, Delay).unwrap();
         let interface = SpiInterface::new(spi_dev, dc, buffer);
         let orientation = Orientation::new().rotate(mipidsi::options::Rotation::Deg90);
         let display = mipidsi::Builder::new(ST7789, interface)
@@ -243,24 +242,4 @@ impl<'a> Display<'a> {
     fn deep_sleep(&mut self) {
         self.pwr.set_low();
     }
-}
-
-/// Noop `OutputPin` implementation.
-///
-/// This is passed to `ExclusiveDevice`, because the CS pin is handle in
-/// hardware.
-pub struct NoCs;
-
-impl embedded_hal::digital::OutputPin for NoCs {
-    fn set_low(&mut self) -> Result<(), Self::Error> {
-        Ok(())
-    }
-
-    fn set_high(&mut self) -> Result<(), Self::Error> {
-        Ok(())
-    }
-}
-
-impl embedded_hal::digital::ErrorType for NoCs {
-    type Error = core::convert::Infallible;
 }

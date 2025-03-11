@@ -1,10 +1,9 @@
 use defmt::info;
-use embassy_rp::gpio::{Level, Output};
-use embassy_rp::spi::Spi;
-use embedded_hal::digital::OutputPin;
+use embedded_hal::digital::v2::OutputPin;
 use embedded_hal_async::spi::SpiBus;
+
 use embedded_sdmmc_async::{
-    BlockDevice, Controller, Directory, File, Mode, TimeSource, Timestamp, Volume, VolumeIdx,
+    BlockSpi, Controller, Directory, File, Mode, TimeSource, Timestamp, Volume, VolumeIdx,
 };
 
 const SD_CARD_CHUNK_LEN: usize = 512;
@@ -15,7 +14,7 @@ where
     CS: OutputPin,
 {
     file_buffer: [u8; SD_CARD_CHUNK_LEN],
-    sd_controller: Controller<Spi<'a, SPI, CS>, DummyTimeSource>,
+    sd_controller: Controller<BlockSpi<'a, SPI, CS>, DummyTimeSource>,
     file: Option<File>,
     volume: Option<Volume>,
     dir: Option<Directory>,
