@@ -16,7 +16,7 @@ where
 {
     file_buffer: [u8; SD_CARD_CHUNK_LEN],
     sd_controller: Controller<BlockSpi<'a, SPI, CS>, DummyTimeSource>,
-    file: Option<AudioFile>,
+    pub file: Option<AudioFile>,
     volume: Option<Volume>,
     dir: Option<Directory>,
     read_index: usize,

@@ -34,13 +34,6 @@ use {defmt_rtt as _, panic_probe as _};
 mod display;
 mod file_reader;
 
-const AUDIO_FRAME_BYTES_LEN: usize = NUM_SAMPLES * mem::size_of::<Sample>();
-const BB_BYTES_LEN: usize = AUDIO_FRAME_BYTES_LEN * 6;
-const NUM_SAMPLES: usize = 960; // for both left and right channels
-const FILE_FRAME_LEN: usize = 400; // containing 2 channels of audio
-static BB: BBBuffer<BB_BYTES_LEN> = BBBuffer::new();
-type Sample = i16;
-
 bind_interrupts!(struct Irqs {
     // i2s
     PIO0_IRQ_0 => pio::InterruptHandler<PIO0>;
@@ -83,20 +76,15 @@ async fn main(spawner: Spawner) {
         );
         let cs = Output::new(p.PIN_5, Level::High);
 
-        let mut sd_card = SdMmcSpi::new(spi, cs);
+        let sd_card = SdMmcSpi::new(spi, cs);
         sd_card
     };
 
-    // used for sending data between tasks
-    let (producer, mut consumer) = BB.try_split().unwrap();
-
-    unwrap!(spawner.spawn(reader(sdcard, producer)));
-
     // i2s DAC
     {
-        const SAMPLE_RATE: u32 = 48_000;
-        const BIT_DEPTH: u32 = 16;
-        const CHANNELS: u32 = 2;
+        const SAMPLE_RATE: u32 = 8_000;
+        const BIT_DEPTH: u32 = 8;
+        const CHANNELS: u32 = 1;
 
         // Setup pio state machine for i2s output
         let Pio {
@@ -120,20 +108,32 @@ async fn main(spawner: Spawner) {
             CHANNELS,
             &program,
         );
-        unwrap!(spawner.spawn(audio(i2s, consumer)))
+        unwrap!(spawner.spawn(reader(sdcard, i2s)))
     }
 }
 
 #[embassy_executor::task]
-async fn audio(
+async fn reader(
+    mut sd_card: SdMmcSpi<Spi<'static, SPI0, spi::Async>, Output<'static>>,
     mut i2s: PioI2sOut<'static, PIO0, 0>,
-    mut consumer: bbqueue::Consumer<'static, BB_BYTES_LEN>,
 ) {
+    let block_device = {
+        loop {
+            if let Ok(dev) = sd_card.acquire().await {
+                break dev;
+            }
+            warn!("Could not init Sd card");
+            Timer::after_millis(500).await;
+        }
+    };
+    let mut file_reader = FileReader::new(block_device, "test.wav");
+    file_reader.open().await;
+
     // create two audio buffers (back and front) which will take turns being
     // filled with new audio data and being sent to the pio fifo using dma
-    const BUFFER_SIZE: usize = 960;
-    static DMA_BUFFER: StaticCell<[u32; BUFFER_SIZE * 2]> = StaticCell::new();
-    let dma_buffer = DMA_BUFFER.init_with(|| [0u32; BUFFER_SIZE * 2]);
+    const BUFFER_SIZE: usize = 100;
+    static DMA_BUFFER: StaticCell<[u32; BUFFER_SIZE]> = StaticCell::new();
+    let dma_buffer = DMA_BUFFER.init_with(|| [0u32; BUFFER_SIZE]);
     let (mut back_buffer, mut front_buffer) = dma_buffer.split_at_mut(BUFFER_SIZE);
 
     loop {
@@ -141,74 +141,26 @@ async fn audio(
         // but don't await the returned future, yet
         let dma_future = i2s.write(front_buffer);
 
-        // fill back buffer with fresh audio samples before awaiting the dma future
-        for s in back_buffer.iter_mut() {
-            // lock free read
-            match consumer.read() {
-                Ok(read) => {
-                    let mut result = 0;
-                    for i in 0..4 {
-                        result |= (read[i] as u32) << (i * 8);
-                    }
-                    read.release(AUDIO_FRAME_BYTES_LEN);
+        let mut read_buf = [0u8; BUFFER_SIZE / 3];
+        // read a frame of audio data from the sd card
+        file_reader.read_exact(&mut read_buf).await;
 
-                    *s = result
-                }
-                Err(_) => {
-                    // decoding cannot keep up with playback speed - play silence instead
-                    *s = 0
-                }
-            };
+        // decode if necisary
+        // ...
+
+        // convert 8bit to 24bit
+        for (dma, read) in back_buffer.iter_mut().zip(read_buf) {
+            let mut result = 0;
+            for i in 0..4 {
+                result |= (read as u32) << (i * 8);
+            }
+            *dma = result
         }
 
         // now await the dma future. once the dma finishes, the next buffer needs to be queued
         // within DMA_DEPTH / SAMPLE_RATE = 8 / 48000 seconds = 166us
         dma_future.await;
         mem::swap(&mut back_buffer, &mut front_buffer);
-    }
-}
-
-#[embassy_executor::task]
-async fn reader(
-    mut sd_card: SdMmcSpi<Spi<'static, SPI0, spi::Async>, Output<'static>>,
-    mut producer: bbqueue::Producer<'static, BB_BYTES_LEN>,
-) {
-    let block_device = sd_card.acquire().await.unwrap();
-    let mut file_reader = FileReader::new(block_device, "test.wav");
-    file_reader.open().await;
-
-    let mut dec_in_buffer = [0; FILE_FRAME_LEN];
-    let mut dec_out_buffer = [0; NUM_SAMPLES / 2];
-
-    loop {
-        match producer.grant_exact(AUDIO_FRAME_BYTES_LEN) {
-            Ok(mut wgr) => {
-                // read a frame of audio data from the sd card
-                file_reader.read_exact(&mut dec_in_buffer).await;
-
-                // set num bytes to be committed (otherwise wgr.buf() may contain the wrong number of bytes)
-                wgr.to_commit(AUDIO_FRAME_BYTES_LEN);
-
-                // the pcm buffer (wgr) has L-R audio samples interleved
-                encode_to_out_buf(&dec_out_buffer, &mut wgr.buf()[2..]);
-            }
-            Err(_) => {
-                // input queue full, this is normal
-                // the i2s interrupt firing should free up space
-                Timer::after(Duration::from_micros(1000)).await;
-            }
-        }
-    }
-}
-
-fn encode_to_out_buf(decoder_buf: &[i16], pcm_buf: &mut [u8]) {
-    // take 2 bytes at a time and skip every second chunk
-    // we do this because this buffer is for stereo audio with L-R samples interleved
-    for (src, dst) in decoder_buf
-        .iter()
-        .zip(pcm_buf.chunks_exact_mut(2).step_by(2))
-    {
-        LittleEndian::write_i16(dst, *src);
     }
 }
 
