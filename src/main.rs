@@ -28,7 +28,6 @@ use mipidsi::interface::SpiInterface;
 use mipidsi::models::ST7789;
 use mipidsi::options::{ColorInversion, Orientation};
 use static_cell::StaticCell;
-use wavv::{DataBulk, Wav};
 use {defmt_rtt as _, panic_probe as _};
 
 // mod ble;
@@ -109,7 +108,7 @@ async fn main(spawner: Spawner) {
         let data_pin = p.PIN_20;
 
         let program = PioI2sOutProgram::new(&mut common);
-        let mut i2s = PioI2sOut::new(
+        let i2s = PioI2sOut::new(
             &mut common,
             sm0,
             p.DMA_CH0,
@@ -121,37 +120,51 @@ async fn main(spawner: Spawner) {
             CHANNELS,
             &program,
         );
+        unwrap!(spawner.spawn(audio(i2s, consumer)))
+    }
+}
 
-        // create two audio buffers (back and front) which will take turns being
-        // filled with new audio data and being sent to the pio fifo using dma
-        const BUFFER_SIZE: usize = 960;
-        static DMA_BUFFER: StaticCell<[u32; BUFFER_SIZE * 2]> = StaticCell::new();
-        let dma_buffer = DMA_BUFFER.init_with(|| [0u32; BUFFER_SIZE * 2]);
-        let (mut back_buffer, mut front_buffer) = dma_buffer.split_at_mut(BUFFER_SIZE);
+#[embassy_executor::task]
+async fn audio(
+    mut i2s: PioI2sOut<'static, PIO0, 0>,
+    mut consumer: bbqueue::Consumer<'static, BB_BYTES_LEN>,
+) {
+    // create two audio buffers (back and front) which will take turns being
+    // filled with new audio data and being sent to the pio fifo using dma
+    const BUFFER_SIZE: usize = 960;
+    static DMA_BUFFER: StaticCell<[u32; BUFFER_SIZE * 2]> = StaticCell::new();
+    let dma_buffer = DMA_BUFFER.init_with(|| [0u32; BUFFER_SIZE * 2]);
+    let (mut back_buffer, mut front_buffer) = dma_buffer.split_at_mut(BUFFER_SIZE);
 
-        loop {
-            // trigger transfer of front buffer data to the pio fifo
-            // but don't await the returned future, yet
-            let dma_future = i2s.write(front_buffer);
+    loop {
+        // trigger transfer of front buffer data to the pio fifo
+        // but don't await the returned future, yet
+        let dma_future = i2s.write(front_buffer);
 
-            // fill back buffer with fresh audio samples before awaiting the dma future
-            for s in back_buffer.iter_mut() {
-                // lock free read
-                match consumer.read() {
-                    Ok(read) => *s = u32::from_be_bytes(read.buf().try_into().unwrap()),
-                    Err(_) => {
-                        // decoding cannot keep up with playback speed - play silence instead
-                        info!("silence");
-                        *s = 0
+        // fill back buffer with fresh audio samples before awaiting the dma future
+        for s in back_buffer.iter_mut() {
+            // lock free read
+            match consumer.read() {
+                Ok(read) => {
+                    let mut result = 0;
+                    for i in 0..4 {
+                        result |= (read[i] as u32) << (i * 8);
                     }
-                };
-            }
+                    read.release(AUDIO_FRAME_BYTES_LEN);
 
-            // now await the dma future. once the dma finishes, the next buffer needs to be queued
-            // within DMA_DEPTH / SAMPLE_RATE = 8 / 48000 seconds = 166us
-            dma_future.await;
-            mem::swap(&mut back_buffer, &mut front_buffer);
+                    *s = result
+                }
+                Err(_) => {
+                    // decoding cannot keep up with playback speed - play silence instead
+                    *s = 0
+                }
+            };
         }
+
+        // now await the dma future. once the dma finishes, the next buffer needs to be queued
+        // within DMA_DEPTH / SAMPLE_RATE = 8 / 48000 seconds = 166us
+        dma_future.await;
+        mem::swap(&mut back_buffer, &mut front_buffer);
     }
 }
 
@@ -171,11 +184,7 @@ async fn reader(
         match producer.grant_exact(AUDIO_FRAME_BYTES_LEN) {
             Ok(mut wgr) => {
                 // read a frame of audio data from the sd card
-                if !file_reader.read_exact(&mut dec_in_buffer).await {
-                    // start reading the file again
-                    info!("start reading the file again");
-                    continue;
-                }
+                file_reader.read_exact(&mut dec_in_buffer).await;
 
                 // set num bytes to be committed (otherwise wgr.buf() may contain the wrong number of bytes)
                 wgr.to_commit(AUDIO_FRAME_BYTES_LEN);

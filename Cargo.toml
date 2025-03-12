@@ -60,7 +60,7 @@ embedded-sdmmc-async = { git = "https://github.com/LegitCamper/embedded-sdmmc-rs
   "defmt-log",
 ], default-features = false }
 bbqueue = { version = "0.5.1", features = ["cortex-m", "thumbv6", "defmt"] }
-wavv = "0.2.0"
+audio_parser = { git = "https://github.com/LegitCamper/audio_parser", branch = "async" }
 
 trouble_audio = { git = "https://github.com/LegitCamper/trouble_audio/", features = [
   "defmt",
@@ -84,4 +84,3 @@ embassy-embedded-hal = { git = "https://github.com/embassy-rs/embassy.git", rev 
 cyw43 = { git = "https://github.com/embassy-rs/embassy.git", rev = "17301c00e986c5b8536435ea31ebf5aaf13aed17" }
 cyw43-pio = { git = "https://github.com/embassy-rs/embassy.git", rev = "17301c00e986c5b8536435ea31ebf5aaf13aed17" }
 trouble-host = { git = "https://github.com/embassy-rs/trouble.git", rev = "7700932050221fa68a274fe713f7d1eb3d477ea2" }
-wavv = { git = "https://github.com/LegitCamper/wavv", rev = "dabfb863a449d2bdcaab0c4971b8bb2263ce6e9b" }
