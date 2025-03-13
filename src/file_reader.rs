@@ -78,6 +78,30 @@ where
             .await;
     }
 
+    pub fn end(&self) -> usize {
+        self.file.as_ref().unwrap().end
+    }
+
+    pub fn read(&self) -> usize {
+        self.file.as_ref().unwrap().read
+    }
+
+    pub fn start(&self) -> usize {
+        self.file.as_ref().unwrap().start
+    }
+
+    pub fn sample_rate(&self) -> u32 {
+        self.file.as_ref().unwrap().sample_rate
+    }
+
+    pub fn bit_depth(&self) -> u16 {
+        self.file.as_ref().unwrap().bit_depth
+    }
+
+    pub fn channels(&self) -> u16 {
+        self.file.as_ref().unwrap().num_channels
+    }
+
     pub fn close(self) -> Controller<BlockSpi<'a, SPI, CS>, DummyTimeSource> {
         self.sd_controller
     }

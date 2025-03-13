@@ -3,10 +3,10 @@
 
 use core::default::Default;
 use core::mem;
-use core::ops::BitOr;
 use defmt::*;
 use display::{Display, MediaUi};
 use embassy_executor::Spawner;
+use embassy_futures::join::join;
 use embassy_rp::bind_interrupts;
 use embassy_rp::gpio::{Level, Output};
 use embassy_rp::peripherals::{DMA_CH2, I2C0, I2C1, PIN_2, PIN_3, PIN_4, PIN_5, PIO0, PIO1, SPI0};
@@ -128,6 +128,11 @@ async fn reader(
             FileReader::new(sd_controller, "test.wav");
         file_reader.open().await;
 
+        let sample_rate = file_reader.sample_rate();
+        let bit_depth = file_reader.bit_depth();
+        // let end = file_reader.end();
+        let bit_rate = bit_depth as u32 * sample_rate;
+
         // create two audio buffers (back and front) which will take turns being
         // filled with new audio data and being sent to the pio fifo using dma
         // *2 is buffer swapping not stereo
@@ -136,41 +141,45 @@ async fn reader(
         let (mut back_buffer, mut front_buffer) = dma_buffer.split_at_mut(BUFFER_SIZE);
 
         loop {
-            if file_reader.file.as_ref().unwrap().read == file_reader.file.as_ref().unwrap().end {
+            if file_reader.read() == file_reader.end() {
                 info!("Reached end of audio file");
                 break;
             }
+
             let start = Instant::now();
 
-            // trigger transfer of front buffer data to the pio fifo
-            // but don't await the returned future, yet
-            let dma_future = i2s.write(front_buffer);
+            join(
+                // write to back
+                async {
+                    let mut read_buf = [0u8; BUFFER_SIZE];
 
-            let mut read_buf = [0u8; BUFFER_SIZE];
-            // read a frame of audio data from the sd card
-            file_reader.read_exact(&mut read_buf).await;
+                    // read a frame of audio data from the sd card
+                    file_reader.read_exact(&mut read_buf).await;
 
-            // decode if necisary
-            // ...
+                    // decode if necisary
+                    // ...
 
-            // convert 8bit to 24bit
-            // for (dma, read) in back_buffer.iter_mut().zip(read_buf) {
-            //     let mut result = 0;
-            //     for i in 0..4 {
-            //         result |= (read as u32) << (i * 8);
-            //     }
-            //     *dma = result
-            // }
-            convert_8bit_to_24bit_packed(&read_buf, &mut back_buffer);
+                    // convert 8bit to 24bit
+                    convert_8bit_to_24bit_packed(&read_buf, &mut back_buffer);
+                },
+                // read from front
+                async {
+                    // trigger transfer of front buffer data to the pio fifo
+                    // but don't await the returned future, yet
+                    let dma_future = i2s.write(front_buffer);
 
-            // now await the dma future. once the dma finishes, the next buffer needs to be queued
-            // within DMA_DEPTH / SAMPLE_RATE = 8 / 48000 seconds = 166us
-            dma_future.await;
+                    // now await the dma future. once the dma finishes, the next buffer needs to be queued
+                    dma_future.await;
+                },
+            )
+            .await;
+
             mem::swap(&mut back_buffer, &mut front_buffer);
 
-            // Synchronize the timing with the sample rate (e.g., 48kHz, 44.1kHz)
-            // Add a small delay to ensure the next buffer is ready at the right time.
-            // Timer::after(Instant::now().duration_since(start) - Duration::from_hz(8_000)).await; // 166 microseconds for 48kHz sample rate
+            // // Synchronize the timing with the sample rate (e.g., 48kHz, 44.1kHz)
+            // // Add a small delay to ensure the next buffer is ready at the right time.
+            // Timer::after(Instant::now().duration_since(start) - Duration::from_hz(bit_rate.into()))
+            //     .await;
         }
 
         // Close Audio File and get sd controller back
@@ -180,12 +189,11 @@ async fn reader(
 
 fn convert_8bit_to_24bit_packed(read_buf: &[u8], buffer: &mut [u32]) {
     // Ensure we have enough space in the output buffer
-    info!("{}/{}", buffer.len(), read_buf.len());
     defmt::assert!(buffer.len() >= read_buf.len());
 
     // Convert 8-bit audio to 24-bit packed into 32-bit words
     for (i, &sample) in read_buf.iter().enumerate() {
         // Pack the 8-bit sample into the lower 24 bits of a 32-bit word
-        buffer[i] = (sample as u32) << 8; // Shift 8-bit sample to 24-bit space
+        buffer[i] = (sample as u32) << 24; // Shift 8-bit sample to 24-bit space
     }
 }
