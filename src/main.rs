@@ -1,32 +1,21 @@
 #![no_std]
 #![no_main]
 
-use bbqueue::BBBuffer;
-use byteorder::{ByteOrder, LittleEndian};
 use core::default::Default;
 use core::mem;
-use cyw43_pio::PioSpi;
+use core::ops::BitOr;
 use defmt::*;
 use display::{Display, MediaUi};
-use embassy_executor::{Executor, Spawner};
-use embassy_futures::select::select;
+use embassy_executor::Spawner;
 use embassy_rp::bind_interrupts;
 use embassy_rp::gpio::{Level, Output};
-use embassy_rp::i2c;
-use embassy_rp::multicore::{Stack, spawn_core1};
 use embassy_rp::peripherals::{DMA_CH2, I2C0, I2C1, PIN_2, PIN_3, PIN_4, PIN_5, PIO0, PIO1, SPI0};
 use embassy_rp::pio::{self, Pio};
 use embassy_rp::pio_programs::i2s::{PioI2sOut, PioI2sOutProgram};
 use embassy_rp::spi::{self, Spi};
-use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
-use embassy_sync::channel::Channel;
-use embassy_time::{Delay, Duration, Timer};
-use embedded_sdmmc_async::{BlockDevice, Mode, SdMmcSpi, VolumeIdx};
+use embassy_time::{Duration, Instant, Timer};
+use embedded_sdmmc_async::{Controller, SdMmcSpi};
 use file_reader::FileReader;
-use heapless::Vec;
-use mipidsi::interface::SpiInterface;
-use mipidsi::models::ST7789;
-use mipidsi::options::{ColorInversion, Orientation};
 use static_cell::StaticCell;
 use {defmt_rtt as _, panic_probe as _};
 
@@ -43,7 +32,8 @@ bind_interrupts!(struct Irqs {
 
 #[embassy_executor::main]
 async fn main(spawner: Spawner) {
-    let mut p = embassy_rp::init(Default::default());
+    let p = embassy_rp::init(Default::default());
+    info!("Clock: {}", embassy_rp::clocks::clk_sys_freq());
 
     // Set up SPI1 for ST7789 TFT Display
     let mut buffer = [0u8; 4096];
@@ -117,6 +107,9 @@ async fn reader(
     mut sd_card: SdMmcSpi<Spi<'static, SPI0, spi::Async>, Output<'static>>,
     mut i2s: PioI2sOut<'static, PIO0, 0>,
 ) {
+    const BUFFER_SIZE: usize = 960;
+
+    // Wait for sdcard
     let block_device = {
         loop {
             if let Ok(dev) = sd_card.acquire().await {
@@ -126,68 +119,73 @@ async fn reader(
             Timer::after_millis(500).await;
         }
     };
-    let mut file_reader = FileReader::new(block_device, "test.wav");
-    file_reader.open().await;
 
-    // create two audio buffers (back and front) which will take turns being
-    // filled with new audio data and being sent to the pio fifo using dma
-    const BUFFER_SIZE: usize = 100;
-    static DMA_BUFFER: StaticCell<[u32; BUFFER_SIZE]> = StaticCell::new();
-    let dma_buffer = DMA_BUFFER.init_with(|| [0u32; BUFFER_SIZE]);
-    let (mut back_buffer, mut front_buffer) = dma_buffer.split_at_mut(BUFFER_SIZE);
+    let timesource = file_reader::DummyTimeSource {};
+    let mut sd_controller = Controller::new(block_device, timesource);
 
     loop {
-        // trigger transfer of front buffer data to the pio fifo
-        // but don't await the returned future, yet
-        let dma_future = i2s.write(front_buffer);
+        let mut file_reader: FileReader<'_, Spi<'_, SPI0, spi::Async>, Output<'_>, BUFFER_SIZE> =
+            FileReader::new(sd_controller, "test.wav");
+        file_reader.open().await;
 
-        let mut read_buf = [0u8; BUFFER_SIZE / 3];
-        // read a frame of audio data from the sd card
-        file_reader.read_exact(&mut read_buf).await;
+        // create two audio buffers (back and front) which will take turns being
+        // filled with new audio data and being sent to the pio fifo using dma
+        // *2 is buffer swapping not stereo
+        static DMA_BUFFER: StaticCell<[u32; BUFFER_SIZE * 2]> = StaticCell::new();
+        let dma_buffer = DMA_BUFFER.init_with(|| [0u32; BUFFER_SIZE * 2]);
+        let (mut back_buffer, mut front_buffer) = dma_buffer.split_at_mut(BUFFER_SIZE);
 
-        // decode if necisary
-        // ...
-
-        // convert 8bit to 24bit
-        for (dma, read) in back_buffer.iter_mut().zip(read_buf) {
-            let mut result = 0;
-            for i in 0..4 {
-                result |= (read as u32) << (i * 8);
+        loop {
+            if file_reader.file.as_ref().unwrap().read == file_reader.file.as_ref().unwrap().end {
+                info!("Reached end of audio file");
+                break;
             }
-            *dma = result
+            let start = Instant::now();
+
+            // trigger transfer of front buffer data to the pio fifo
+            // but don't await the returned future, yet
+            let dma_future = i2s.write(front_buffer);
+
+            let mut read_buf = [0u8; BUFFER_SIZE];
+            // read a frame of audio data from the sd card
+            file_reader.read_exact(&mut read_buf).await;
+
+            // decode if necisary
+            // ...
+
+            // convert 8bit to 24bit
+            // for (dma, read) in back_buffer.iter_mut().zip(read_buf) {
+            //     let mut result = 0;
+            //     for i in 0..4 {
+            //         result |= (read as u32) << (i * 8);
+            //     }
+            //     *dma = result
+            // }
+            convert_8bit_to_24bit_packed(&read_buf, &mut back_buffer);
+
+            // now await the dma future. once the dma finishes, the next buffer needs to be queued
+            // within DMA_DEPTH / SAMPLE_RATE = 8 / 48000 seconds = 166us
+            dma_future.await;
+            mem::swap(&mut back_buffer, &mut front_buffer);
+
+            // Synchronize the timing with the sample rate (e.g., 48kHz, 44.1kHz)
+            // Add a small delay to ensure the next buffer is ready at the right time.
+            // Timer::after(Instant::now().duration_since(start) - Duration::from_hz(8_000)).await; // 166 microseconds for 48kHz sample rate
         }
 
-        // now await the dma future. once the dma finishes, the next buffer needs to be queued
-        // within DMA_DEPTH / SAMPLE_RATE = 8 / 48000 seconds = 166us
-        dma_future.await;
-        mem::swap(&mut back_buffer, &mut front_buffer);
+        // Close Audio File and get sd controller back
+        sd_controller = file_reader.close();
     }
 }
 
-// // Ui and media playback
-// #[embassy_executor::task]
-// async fn core1_task(
-//     mut display: display::DISPLAY,
-//     backlight: Output<'static>,
-//     // mut dac: MCP4725<i2c::I2c<'static, I2C1, i2c::Async>>,
-//     pwr: Output<'static>,
-//     spi: PioSpi<'static, PIO1, 0, DMA_CH2>,
-// ) {
-//     info!("hello from core 0");
+fn convert_8bit_to_24bit_packed(read_buf: &[u8], buffer: &mut [u32]) {
+    // Ensure we have enough space in the output buffer
+    info!("{}/{}", buffer.len(), read_buf.len());
+    defmt::assert!(buffer.len() >= read_buf.len());
 
-//     let mut media_ui = Display::new(display, backlight);
-//     media_ui.center_str("Loading...");
-//     Timer::after_secs(2).await;
-//     // media_ui.sleep();
-
-//     // info!("playing music");
-//     // loop {
-//     //     let samples = CHANNEL.receive().await;
-//     //     if let DataBulk::BitDepth8(samples) = samples {
-//     //         for sample in samples {
-//     //             dac.set_dac_fast(PowerDown::Normal, sample.into()).ok();
-//     //             Timer::after(Duration::from_hz(8000)).await;
-//     //         }
-//     //     }
-//     // }
-// }
+    // Convert 8-bit audio to 24-bit packed into 32-bit words
+    for (i, &sample) in read_buf.iter().enumerate() {
+        // Pack the 8-bit sample into the lower 24 bits of a 32-bit word
+        buffer[i] = (sample as u32) << 8; // Shift 8-bit sample to 24-bit space
+    }
+}

@@ -1,5 +1,4 @@
 use audio_parser::AudioFile;
-use defmt::info;
 use embedded_hal::digital::v2::OutputPin;
 use embedded_hal_async::spi::SpiBus;
 
@@ -7,41 +6,36 @@ use embedded_sdmmc_async::{
     BlockSpi, Controller, Directory, Mode, TimeSource, Timestamp, Volume, VolumeIdx,
 };
 
-const SD_CARD_CHUNK_LEN: usize = 512;
-
-pub struct FileReader<'a, SPI, CS>
+pub struct FileReader<'a, SPI, CS, const CHUNK_LEN: usize>
 where
     SPI: SpiBus<u8>,
     CS: OutputPin,
 {
-    file_buffer: [u8; SD_CARD_CHUNK_LEN],
     sd_controller: Controller<BlockSpi<'a, SPI, CS>, DummyTimeSource>,
-    pub file: Option<AudioFile>,
+    pub file: Option<AudioFile<CHUNK_LEN>>,
     volume: Option<Volume>,
     dir: Option<Directory>,
     read_index: usize,
     file_name: &'static str,
 }
 
-struct DummyTimeSource {}
+pub struct DummyTimeSource {}
 impl TimeSource for DummyTimeSource {
     fn get_timestamp(&self) -> Timestamp {
         Timestamp::from_calendar(2022, 1, 1, 0, 0, 0).unwrap()
     }
 }
 
-impl<'a, SPI, CS> FileReader<'a, SPI, CS>
+impl<'a, SPI, CS, const CHUNK_LEN: usize> FileReader<'a, SPI, CS, CHUNK_LEN>
 where
     SPI: SpiBus<u8>,
     CS: OutputPin,
 {
-    pub fn new(block_device: BlockSpi<'a, SPI, CS>, file_name: &'static str) -> Self {
-        let timesource = DummyTimeSource {};
-        let sd_controller = Controller::new(block_device, timesource);
-        let file_buffer = [0u8; SD_CARD_CHUNK_LEN];
-
+    pub fn new(
+        sd_controller: Controller<BlockSpi<'a, SPI, CS>, DummyTimeSource>,
+        file_name: &'static str,
+    ) -> Self {
         Self {
-            file_buffer,
             sd_controller,
             file: None,
             volume: None,
@@ -66,13 +60,9 @@ where
             .await
             .unwrap();
 
-        let mut audio_file = AudioFile::new_wav(file, &mut self.sd_controller, &volume)
+        let audio_file = AudioFile::new_wav(file, &mut self.sd_controller, &volume)
             .await
             .unwrap();
-
-        audio_file
-            .read_exact(&mut self.sd_controller, &volume, &mut self.file_buffer)
-            .await;
 
         self.file = Some(audio_file);
         self.volume = Some(volume);
@@ -88,16 +78,7 @@ where
             .await;
     }
 
-    // fn close(&mut self) {
-    //     if let Some(file) = self.file.take() {
-    //         self.sd_controller
-    //             .close_file(self.volume.as_ref().unwrap(), file)
-    //             .unwrap();
-    //     }
-
-    //     if let Some(dir) = self.dir.take() {
-    //         self.sd_controller
-    //             .close_dir(self.volume.as_ref().unwrap(), dir);
-    //     }
-    // }
+    pub fn close(self) -> Controller<BlockSpi<'a, SPI, CS>, DummyTimeSource> {
+        self.sd_controller
+    }
 }
