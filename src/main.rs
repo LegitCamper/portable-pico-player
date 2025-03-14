@@ -35,21 +35,21 @@ async fn main(spawner: Spawner) {
     let p = embassy_rp::init(Default::default());
     info!("Clock: {}", embassy_rp::clocks::clk_sys_freq());
 
-    // Set up SPI1 for ST7789 TFT Display
-    let mut buffer = [0u8; 4096];
-    let display = Display::new(
-        Output::new(p.PIN_15, Level::High),
-        p.SPI1,
-        p.PIN_10,
-        p.PIN_11,
-        Output::new(p.PIN_13, Level::Low),
-        Output::new(p.PIN_14, Level::Low),
-        &mut buffer,
-    );
-    Timer::after_secs(4).await;
+    // // Set up SPI1 for ST7789 TFT Display
+    // let mut buffer = [0u8; 4096];
+    // let display = Display::new(
+    //     Output::new(p.PIN_15, Level::High),
+    //     p.SPI1,
+    //     p.PIN_10,
+    //     p.PIN_11,
+    //     Output::new(p.PIN_13, Level::Low),
+    //     Output::new(p.PIN_14, Level::Low),
+    //     &mut buffer,
+    // );
+    // Timer::after_secs(4).await;
 
-    let mut media_ui = MediaUi::new(display);
-    media_ui.init();
+    // let mut media_ui = MediaUi::new(display);
+    // media_ui.init();
 
     // Set up SPI0 for the Micro SD reader
     let sdcard = {
@@ -73,8 +73,8 @@ async fn main(spawner: Spawner) {
     // i2s DAC
     {
         const SAMPLE_RATE: u32 = 8_000;
-        const BIT_DEPTH: u32 = 8;
-        const CHANNELS: u32 = 1;
+        const BIT_DEPTH: u32 = 16;
+        const CHANNELS: u32 = 2;
 
         // Setup pio state machine for i2s output
         let Pio {
@@ -123,6 +123,13 @@ async fn reader(
     let timesource = file_reader::DummyTimeSource {};
     let mut sd_controller = Controller::new(block_device, timesource);
 
+    // create two audio buffers (back and front) which will take turns being
+    // filled with new audio data and being sent to the pio fifo using dma
+    // *2 is buffer swapping not stereo
+    static DMA_BUFFER: StaticCell<[u32; BUFFER_SIZE * 2]> = StaticCell::new();
+    let dma_buffer = DMA_BUFFER.init_with(|| [0u32; BUFFER_SIZE * 2]);
+    let (mut back_buffer, mut front_buffer) = dma_buffer.split_at_mut(BUFFER_SIZE);
+
     loop {
         let mut file_reader: FileReader<'_, Spi<'_, SPI0, spi::Async>, Output<'_>, BUFFER_SIZE> =
             FileReader::new(sd_controller, "test.wav");
@@ -130,18 +137,11 @@ async fn reader(
 
         let sample_rate = file_reader.sample_rate();
         let bit_depth = file_reader.bit_depth();
-        // let end = file_reader.end();
         let bit_rate = bit_depth as u32 * sample_rate;
 
-        // create two audio buffers (back and front) which will take turns being
-        // filled with new audio data and being sent to the pio fifo using dma
-        // *2 is buffer swapping not stereo
-        static DMA_BUFFER: StaticCell<[u32; BUFFER_SIZE * 2]> = StaticCell::new();
-        let dma_buffer = DMA_BUFFER.init_with(|| [0u32; BUFFER_SIZE * 2]);
-        let (mut back_buffer, mut front_buffer) = dma_buffer.split_at_mut(BUFFER_SIZE);
-
         loop {
-            if file_reader.read() == file_reader.end() {
+            info!("Read {}/{}", file_reader.read(), file_reader.end());
+            if file_reader.read() >= file_reader.end() {
                 info!("Reached end of audio file");
                 break;
             }
@@ -160,7 +160,16 @@ async fn reader(
                     // ...
 
                     // convert 8bit to 24bit
-                    convert_8bit_to_24bit_packed(&read_buf, &mut back_buffer);
+                    back_buffer
+                        .iter_mut()
+                        .zip(read_buf)
+                        .for_each(|(dma, read)| {
+                            // Pack the 8-bit sample into the lower 24 bits of a 32-bit word
+                            // *dma = (read as u32) // Shift 8-bit sample to 24-bit space
+                            // duplicate mono sample into lower and upper half of dma word
+                            // *dma = (read as u16 as u32) * 0x10001;
+                            *dma = read as u16 as u32;
+                        });
                 },
                 // read from front
                 async {
@@ -176,24 +185,14 @@ async fn reader(
 
             mem::swap(&mut back_buffer, &mut front_buffer);
 
-            // // Synchronize the timing with the sample rate (e.g., 48kHz, 44.1kHz)
-            // // Add a small delay to ensure the next buffer is ready at the right time.
-            // Timer::after(Instant::now().duration_since(start) - Duration::from_hz(bit_rate.into()))
-            //     .await;
+            // Synchronize the timing with the sample rate (e.g., 48kHz, 44.1kHz)
+            // Add a small delay to ensure the next buffer is ready at the right time.
+            Timer::after(Instant::now().duration_since(start) - Duration::from_hz(bit_rate.into()))
+                .await;
         }
+        info!("finished reading test");
 
         // Close Audio File and get sd controller back
         sd_controller = file_reader.close();
-    }
-}
-
-fn convert_8bit_to_24bit_packed(read_buf: &[u8], buffer: &mut [u32]) {
-    // Ensure we have enough space in the output buffer
-    defmt::assert!(buffer.len() >= read_buf.len());
-
-    // Convert 8-bit audio to 24-bit packed into 32-bit words
-    for (i, &sample) in read_buf.iter().enumerate() {
-        // Pack the 8-bit sample into the lower 24 bits of a 32-bit word
-        buffer[i] = (sample as u32) << 24; // Shift 8-bit sample to 24-bit space
     }
 }

@@ -102,7 +102,18 @@ where
         self.file.as_ref().unwrap().num_channels
     }
 
-    pub fn close(self) -> Controller<BlockSpi<'a, SPI, CS>, DummyTimeSource> {
+    pub fn close(mut self) -> Controller<BlockSpi<'a, SPI, CS>, DummyTimeSource> {
+        if let Some(audio_file) = self.file {
+            self.sd_controller
+                .close_file(self.volume.as_ref().unwrap(), audio_file.destroy())
+                .unwrap();
+        };
+
+        if let Some(dir) = self.dir.take() {
+            self.sd_controller
+                .close_dir(self.volume.as_ref().unwrap(), dir);
+        }
+
         self.sd_controller
     }
 }
