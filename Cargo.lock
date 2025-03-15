@@ -90,7 +90,6 @@ checksum = "1505bd5d3d116872e7271a6d4e16d81d0c8570876c8de68093a09ac269d8aac0"
 [[package]]
 name = "audio_parser"
 version = "0.2.0"
-source = "git+https://github.com/LegitCamper/audio_parser?branch=async#a4b08177840416a3ad8e230010240f55704d18dd"
 dependencies = [
  "embedded-sdmmc-async",
  "heapless 0.8.0",

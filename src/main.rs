@@ -1,5 +1,6 @@
 #![no_std]
 #![no_main]
+#![feature(inherent_str_constructors)]
 
 use core::default::Default;
 use core::mem;
@@ -16,13 +17,14 @@ use embassy_rp::pio_programs::i2s::{PioI2sOut, PioI2sOutProgram};
 use embassy_rp::spi::{self, Spi};
 use embassy_time::{Duration, Instant, Timer, with_timeout};
 use embedded_sdmmc_async::{Controller, SdMmcSpi};
-use file_reader::FileReader;
+use heapless::{String, Vec};
 use static_cell::StaticCell;
 use {defmt_rtt as _, panic_probe as _};
 
 // mod ble;
 mod display;
 mod file_reader;
+use file_reader::Library;
 
 bind_interrupts!(struct Irqs {
     // i2s
@@ -36,21 +38,21 @@ async fn main(spawner: Spawner) {
     let p = embassy_rp::init(Default::default());
     info!("Clock: {}", embassy_rp::clocks::clk_sys_freq());
 
-    // // Set up SPI1 for ST7789 TFT Display
-    // let mut buffer = [0u8; 4096];
-    // let display = Display::new(
-    //     Output::new(p.PIN_15, Level::High),
-    //     p.SPI1,
-    //     p.PIN_10,
-    //     p.PIN_11,
-    //     Output::new(p.PIN_13, Level::Low),
-    //     Output::new(p.PIN_14, Level::Low),
-    //     &mut buffer,
-    // );
-    // Timer::after_secs(4).await;
+    // Set up SPI1 for ST7789 TFT Display
+    let mut buffer = [0u8; 4096];
+    let display = Display::new(
+        Output::new(p.PIN_15, Level::High),
+        p.SPI1,
+        p.PIN_10,
+        p.PIN_11,
+        Output::new(p.PIN_13, Level::Low),
+        Output::new(p.PIN_14, Level::Low),
+        &mut buffer,
+    );
+    Timer::after_secs(4).await;
 
-    // let mut media_ui = MediaUi::new(display);
-    // media_ui.init();
+    let mut media_ui = MediaUi::new(display);
+    media_ui.init();
 
     // Set up SPI0 for the Micro SD reader
     let sdcard = {
@@ -72,7 +74,7 @@ async fn main(spawner: Spawner) {
     };
 
     // i2s DAC
-    {
+    let i2s = {
         const SAMPLE_RATE: u32 = 8_000;
         const BIT_DEPTH: u32 = 16;
         const CHANNELS: u32 = 2;
@@ -87,7 +89,7 @@ async fn main(spawner: Spawner) {
         let data_pin = p.PIN_20;
 
         let program = PioI2sOutProgram::new(&mut common);
-        let i2s = PioI2sOut::new(
+        PioI2sOut::new(
             &mut common,
             sm0,
             p.DMA_CH0,
@@ -98,9 +100,9 @@ async fn main(spawner: Spawner) {
             BIT_DEPTH,
             CHANNELS,
             &program,
-        );
-        unwrap!(spawner.spawn(reader(sdcard, i2s)))
-    }
+        )
+    };
+    unwrap!(spawner.spawn(reader(sdcard, i2s)))
 }
 
 const BUFFER_SIZE: usize = 1024;
@@ -123,6 +125,11 @@ async fn reader(
 
     let timesource = file_reader::DummyTimeSource {};
     let mut sd_controller = Controller::new(block_device, timesource);
+    let mut library: Library<_, _, 10, 10, BUFFER_SIZE> = Library::new(sd_controller);
+    library.discover_music().await;
+
+    // let music_files: file_reader::Library<> = discover_music(sd_controller).await;
+    // info!("Files: {:?}", music_files);
 
     // create two audio buffers (back and front) which will take turns being
     // filled with new audio data and being sent to the pio fifo using dma
@@ -131,87 +138,85 @@ async fn reader(
     let dma_buffer = DMA_BUFFER.init_with(|| [0u32; BUFFER_SIZE * 2]);
     let (mut back_buffer, mut front_buffer) = dma_buffer.split_at_mut(BUFFER_SIZE);
 
-    loop {
-        let mut file_reader: FileReader<'_, Spi<'_, SPI0, spi::Async>, Output<'_>, BUFFER_SIZE> =
-            FileReader::new(sd_controller, "test.wav");
-        file_reader.open().await;
+    // loop {
+    //     library.open("xo.wav").await;
 
-        let sample_rate = file_reader.sample_rate();
-        let bit_depth = file_reader.bit_depth();
+    //     let sample_rate = library.sample_rate();
+    //     let bit_depth = library.bit_depth();
 
-        // Calculate the timeout as the time to fill the buffer (in seconds)
-        let timeout_secs_f64 = BUFFER_SIZE as f64 / sample_rate as f64;
-        let timeout_millis = (timeout_secs_f64 * 1000.0) as u64; // Convert seconds to milliseconds
-        let timeout = Duration::from_millis(timeout_millis);
+    //     // Calculate the timeout as the time to fill the buffer (in seconds)
+    //     let timeout_secs_f64 = BUFFER_SIZE as f64 / sample_rate as f64;
+    //     let timeout_millis = (timeout_secs_f64 * 1000.0) as u64; // Convert seconds to milliseconds
+    //     let timeout = Duration::from_millis(timeout_millis);
 
-        fill_back(&mut file_reader, &mut front_buffer).await;
-        loop {
-            let start = Instant::now();
-            if file_reader.read() >= file_reader.end() {
-                info!("Reached end of audio file");
-                break;
-            }
+    //     fill_back(&mut file_reader, &mut front_buffer).await;
+    //     loop {
+    //         let start = Instant::now();
+    //         if file_reader.read() >= file_reader.end() {
+    //             info!("Reached end of audio file");
+    //             break;
+    //         }
 
-            // Read the next chunk of data into the back buffer asynchronously while sending front buffer.
-            let back_buffer_fut = async {
-                if let Err(_) =
-                    with_timeout(timeout, fill_back(&mut file_reader, &mut back_buffer)).await
-                {
-                    info!("Filling with silence due to timeout.");
-                    // Fill with silence bc reading took too long
-                    back_buffer.fill(0);
-                }
-            };
+    //         // Read the next chunk of data into the back buffer asynchronously while sending front buffer.
+    //         let back_buffer_fut = async {
+    //             if let Err(_) =
+    //                 with_timeout(timeout, fill_back(&mut file_reader, &mut back_buffer)).await
+    //             {
+    //                 info!("Filling with silence due to timeout.");
+    //                 // Fill with silence bc reading took too long
+    //                 back_buffer.fill(0);
+    //             }
+    //         };
 
-            // Write the front buffer data to the i2s DMA while the back buffer is being filled.
-            let dma_future = i2s.write(front_buffer);
+    //         // Write the front buffer data to the i2s DMA while the back buffer is being filled.
+    //         let dma_future = i2s.write(front_buffer);
 
-            // Execute the two tasks concurrently.
-            join(back_buffer_fut, dma_future).await;
+    //         // Execute the two tasks concurrently.
+    //         join(back_buffer_fut, dma_future).await;
 
-            // Synchronize the timing with the sample rate (e.g., 48kHz, 44.1kHz)
-            // Calculate the time elapsed since starting this loop
-            let elapsed = Instant::now().duration_since(start);
+    //         // Synchronize the timing with the sample rate (e.g., 48kHz, 44.1kHz)
+    //         // Calculate the time elapsed since starting this loop
+    //         let elapsed = Instant::now().duration_since(start);
 
-            // Calculate the time needed to fill the buffer based on sample rate and buffer size
-            let expected_fill_time =
-                Duration::from_millis((BUFFER_SIZE * 1000) as u64 / sample_rate as u64);
+    //         // Calculate the time needed to fill the buffer based on sample rate and buffer size
+    //         let expected_fill_time =
+    //             Duration::from_millis((BUFFER_SIZE * 1000) as u64 / sample_rate as u64);
 
-            // Adjust timing for any delays that have already occurred
-            let delay_duration = if elapsed < expected_fill_time {
-                expected_fill_time - elapsed
-            } else {
-                Duration::from_millis(0) // If we're behind, don't delay further
-            };
+    //         // Adjust timing for any delays that have already occurred
+    //         let delay_duration = if elapsed < expected_fill_time {
+    //             expected_fill_time - elapsed
+    //         } else {
+    //             Duration::from_millis(0) // If we're behind, don't delay further
+    //         };
 
-            // Wait for the next buffer to be ready
-            Timer::after(delay_duration).await;
+    //         // Wait for the next buffer to be ready
+    //         Timer::after(delay_duration).await;
 
-            mem::swap(&mut back_buffer, &mut front_buffer);
-        }
+    //         mem::swap(&mut back_buffer, &mut front_buffer);
+    //     }
 
-        // Close Audio File and get sd controller back
-        sd_controller = file_reader.close();
-    }
+    //     // Close Audio File and get sd controller back
+    //     sd_controller = file_reader.close();
+    // }
 }
 
-pub async fn fill_back(
-    file_reader: &mut FileReader<'_, Spi<'_, SPI0, spi::Async>, Output<'_>, BUFFER_SIZE>,
-    back_buffer: &mut [u32],
-) {
-    let mut read_buf = [0u8; BUFFER_SIZE];
+// pub async fn fill_back(
+//     file_reader: &mut FileReader<'_, Spi<'_, SPI0, spi::Async>, Output<'_>, BUFFER_SIZE>,
+//     back_buffer: &mut [u32],
+// ) {
+//     let mut read_buf = [0u8; BUFFER_SIZE];
 
-    // read a frame of audio data from the sd card
-    file_reader.read_exact(&mut read_buf).await;
+//     // read a frame of audio data from the sd card
+//     file_reader.read_exact(&mut read_buf).await;
 
-    // decode if necisary
-    // ...
+//     // decode if necisary
+//     // ...
 
-    // convert 8bit to 24bit and make it stereo
-    back_buffer
-        .iter_mut()
-        .zip(read_buf)
-        .for_each(|(dma, read)| {
-            *dma = (read as u32) << 16 | read as u32;
-        });
-}
+//     // convert 8bit to 24bit and make it stereo
+//     back_buffer
+//         .iter_mut()
+//         .zip(read_buf)
+//         .for_each(|(dma, read)| {
+//             *dma = (read as u32) << 16 | read as u32;
+//         });
+// }

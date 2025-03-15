@@ -60,7 +60,8 @@ embedded-sdmmc-async = { git = "https://github.com/LegitCamper/embedded-sdmmc-rs
   "defmt-log",
 ], default-features = false }
 bbqueue = { version = "0.5.1", features = ["cortex-m", "thumbv6", "defmt"] }
-audio_parser = { git = "https://github.com/LegitCamper/audio_parser", branch = "async" }
+# audio_parser = { git = "https://github.com/LegitCamper/audio_parser", branch = "async" }
+audio_parser = { path = "../audio_parser" }
 
 
 trouble_audio = { git = "https://github.com/LegitCamper/trouble_audio/", features = [
