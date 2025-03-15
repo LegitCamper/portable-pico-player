@@ -55,7 +55,7 @@ async fn main(spawner: Spawner) {
     // Set up SPI0 for the Micro SD reader
     let sdcard = {
         let mut config = spi::Config::default();
-        config.frequency = 16_000_000;
+        config.frequency = 65_000_000;
         let spi = spi::Spi::new(
             p.SPI0,
             p.PIN_2,
@@ -164,12 +164,10 @@ async fn reader(
             };
 
             // Write the front buffer data to the i2s DMA while the back buffer is being filled.
-            let dma_future = async { with_timeout(timeout, i2s.write(front_buffer)).await };
+            let dma_future = i2s.write(front_buffer);
 
             // Execute the two tasks concurrently.
-            select(back_buffer_fut, dma_future).await;
-
-            mem::swap(&mut back_buffer, &mut front_buffer);
+            join(back_buffer_fut, dma_future).await;
 
             // Synchronize the timing with the sample rate (e.g., 48kHz, 44.1kHz)
             // Calculate the time elapsed since starting this loop
@@ -188,6 +186,8 @@ async fn reader(
 
             // Wait for the next buffer to be ready
             Timer::after(delay_duration).await;
+
+            mem::swap(&mut back_buffer, &mut front_buffer);
         }
 
         // Close Audio File and get sd controller back
@@ -212,10 +212,7 @@ pub async fn fill_back(
         .iter_mut()
         .zip(read_buf)
         .for_each(|(dma, read)| {
-            // Pack the 8-bit sample into the lower 24 bits of a 32-bit word
-            // *dma = (read as u32) // Shift 8-bit sample to 24-bit space
             // duplicate mono sample into lower and upper half of dma word
-            // *dma = (read as u16 as u32) * 0x10001;
-            *dma = read as u16 as u32;
+            *dma = (read as u16 as u32) * 0x10001;
         });
 }
