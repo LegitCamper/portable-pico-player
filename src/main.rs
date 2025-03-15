@@ -207,12 +207,11 @@ pub async fn fill_back(
     // decode if necisary
     // ...
 
-    // convert 8bit to 24bit
+    // convert 8bit to 24bit and make it stereo
     back_buffer
         .iter_mut()
         .zip(read_buf)
         .for_each(|(dma, read)| {
-            // duplicate mono sample into lower and upper half of dma word
-            *dma = (read as u16 as u32) * 0x10001;
+            *dma = (read as u32) << 16 | read as u32;
         });
 }
