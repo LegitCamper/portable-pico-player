@@ -110,7 +110,7 @@ const BUFFER_SIZE: usize = 1024;
 #[embassy_executor::task]
 async fn reader(
     mut sd_card: SdMmcSpi<Spi<'static, SPI0, spi::Async>, Output<'static>>,
-    mut i2s: PioI2sOut<'static, PIO0, 0>,
+    mut _i2s: PioI2sOut<'static, PIO0, 0>,
 ) {
     // Wait for sdcard
     let block_device = {
@@ -125,8 +125,13 @@ async fn reader(
 
     let timesource = file_reader::DummyTimeSource {};
     let mut sd_controller = Controller::new(block_device, timesource);
-    let mut library: Library<_, _, 10, 10, BUFFER_SIZE> = Library::new(sd_controller);
+    let mut library: Library<_, _, 5, 50, BUFFER_SIZE> = Library::new(sd_controller);
     library.discover_music().await;
+
+    info!("music: {:?}", library.artists());
+
+    // library.open("xo.wav").await;
+    // library.close();
 
     // let music_files: file_reader::Library<> = discover_music(sd_controller).await;
     // info!("Files: {:?}", music_files);

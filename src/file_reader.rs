@@ -24,12 +24,18 @@ impl TimeSource for DummyTimeSource {
     }
 }
 
-pub struct Library<SPI, CS, const MAX_DIRS: usize, const MAX_FILES: usize, const CHUNK_LEN: usize>
-where
-    SPI: SpiBus<u8> + 'static,
-    CS: OutputPin + 'static,
+pub struct Library<
+    'a,
+    SPI,
+    CS,
+    const MAX_DIRS: usize,
+    const MAX_FILES: usize,
+    const CHUNK_LEN: usize,
+> where
+    SPI: SpiBus<u8>,
+    CS: OutputPin,
 {
-    sd_controller: Controller<BlockSpi<'static, SPI, CS>, DummyTimeSource>,
+    sd_controller: Controller<BlockSpi<'a, SPI, CS>, DummyTimeSource>,
     artists: Option<Vec<Artist<MAX_DIRS, MAX_FILES>, MAX_DIRS>>,
     file: Option<AudioFile<CHUNK_LEN>>,
     volume: Option<Volume>,
@@ -38,12 +44,12 @@ where
 }
 
 impl<'a, SPI, CS, const MAX_DIRS: usize, const MAX_FILES: usize, const CHUNK_LEN: usize>
-    Library<SPI, CS, MAX_DIRS, MAX_FILES, CHUNK_LEN>
+    Library<'a, SPI, CS, MAX_DIRS, MAX_FILES, CHUNK_LEN>
 where
     SPI: SpiBus<u8>,
     CS: OutputPin,
 {
-    pub fn new(sd_controller: Controller<BlockSpi<'static, SPI, CS>, DummyTimeSource>) -> Self {
+    pub fn new(sd_controller: Controller<BlockSpi<'a, SPI, CS>, DummyTimeSource>) -> Self {
         Self {
             sd_controller,
             artists: None,
@@ -101,6 +107,10 @@ where
         self.sd_controller.close_dir(&volume, root_dir);
 
         self.artists = Some(artists)
+    }
+
+    pub fn artists(&self) -> Option<&Vec<Artist<MAX_DIRS, MAX_FILES>, MAX_DIRS>> {
+        self.artists.as_ref()
     }
 
     pub async fn open(&mut self, file_name: &'a str) {
@@ -182,9 +192,9 @@ where
 
 async fn get_artist<'a, SPI, CS, const MAX_DIRS: usize, const MAX_FILES: usize>(
     root_dir: &Directory,
-    sd_controller: &mut Controller<BlockSpi<'static, SPI, CS>, DummyTimeSource>,
+    sd_controller: &mut Controller<BlockSpi<'a, SPI, CS>, DummyTimeSource>,
     volume: &Volume,
-    album: &'a str,
+    album: &str,
 ) -> Artist<MAX_DIRS, MAX_FILES>
 where
     SPI: SpiBus<u8>,
@@ -214,7 +224,7 @@ where
             .unwrap();
 
         albums
-            .push(get_album(&album_dir, sd_controller, volume, album.as_str()).await)
+            .push(get_album(&album_dir, sd_controller, volume, album).await)
             .unwrap()
     }
 
@@ -225,9 +235,9 @@ where
 
 async fn get_album<'a, SPI, CS, const MAX_FILES: usize>(
     artist_dir: &Directory,
-    sd_controller: &mut Controller<BlockSpi<'static, SPI, CS>, DummyTimeSource>,
+    sd_controller: &mut Controller<BlockSpi<'a, SPI, CS>, DummyTimeSource>,
     volume: &Volume,
-    album: &'a str,
+    album: String<11>,
 ) -> Album<MAX_FILES>
 where
     SPI: SpiBus<u8>,
