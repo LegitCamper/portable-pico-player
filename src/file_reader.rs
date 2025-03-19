@@ -1,3 +1,6 @@
+use core::str::FromStr;
+
+use audio_parser::AudioFile;
 use defmt::{Format, info, warn};
 use embassy_rp::{
     gpio::Output,
@@ -6,24 +9,26 @@ use embassy_rp::{
 };
 use embedded_hal_bus::spi::ExclusiveDevice;
 use embedded_sdmmc::asynchronous::{
-    Directory, SdCard, ShortFileName, TimeSource, Timestamp, Volume,
+    DirEntry, Directory, LfnBuffer, Mode, SdCard, ShortFileName, TimeSource, Timestamp, Volume,
 };
 use heapless::{String, Vec};
 
 pub const MAX_DIRS: usize = 4;
 pub const MAX_FILES: usize = 4;
 pub const MAX_VOLUMES: usize = 1;
+// Max file or dir name string len
+pub const MAX_NAME_LEN: usize = 25;
 
 #[derive(Debug, Format)]
 pub struct Album<const MAX_FILES: usize> {
-    name: String<11>,
-    songs: Vec<String<11>, MAX_FILES>,
+    pub name: String<MAX_NAME_LEN>,
+    pub songs: Vec<String<MAX_NAME_LEN>, MAX_FILES>,
 }
 
 #[derive(Debug, Format)]
 pub struct Artist<const MAX_DIRS: usize, const MAX_FILES: usize> {
-    name: String<11>,
-    albums: Vec<Album<MAX_FILES>, MAX_DIRS>,
+    pub name: String<MAX_NAME_LEN>,
+    pub albums: Vec<Album<MAX_FILES>, MAX_DIRS>,
 }
 
 pub struct DummyTimeSource {}
@@ -34,7 +39,7 @@ impl TimeSource for DummyTimeSource {
 }
 
 type Device = ExclusiveDevice<Spi<'static, SPI0, spi::Async>, Output<'static>, embassy_time::Delay>;
-type SD = SdCard<Device, embassy_time::Delay>;
+pub type SD = SdCard<Device, embassy_time::Delay>;
 type Dir<'a> = Directory<'a, SD, DummyTimeSource, MAX_DIRS, MAX_FILES, MAX_VOLUMES>;
 
 pub struct Library<'a> {
@@ -50,20 +55,22 @@ impl<'a> Library<'a> {
         }
     }
 
+    pub fn get_root_dir(&self) -> Dir {
+        self.volume.open_root_dir().unwrap()
+    }
+
     pub async fn discover_music(&mut self) {
         let root_dir = self.volume.open_root_dir().unwrap();
 
-        let mut artist_names: Vec<String<11>, MAX_FILES> = Vec::new();
+        let mut artist_names: Vec<String<MAX_NAME_LEN>, MAX_FILES> = Vec::new();
+
+        let mut buf = [0u8; MAX_NAME_LEN];
+        let mut lfn_buffer = LfnBuffer::new(&mut buf);
         root_dir
-            .iterate_dir(|file| {
+            .iterate_dir_lfn(&mut lfn_buffer, |entry, lfn| {
                 if !artist_names.is_full() {
-                    if file.attributes.is_directory() && !ignore_name(&file.name) {
-                        artist_names
-                            .push(
-                                String::from_utf8(Vec::from_slice(file.name.base_name()).unwrap())
-                                    .unwrap(),
-                            )
-                            .unwrap()
+                    if entry.attributes.is_directory() && !ignore_name(&entry.name) {
+                        artist_names.push(get_name(entry, lfn)).unwrap()
                     }
                 } else {
                     warn!("Too many songs in album. increase MAX_DIRS");
@@ -96,15 +103,14 @@ impl<'a> Library<'a> {
 }
 
 async fn get_artist<'a>(dir: &Dir<'a>) -> Vec<Album<MAX_DIRS>, MAX_DIRS> {
-    let mut album_names: Vec<String<11>, MAX_FILES> = Vec::new();
-    dir.iterate_dir(|file| {
+    let mut album_names: Vec<String<MAX_NAME_LEN>, MAX_FILES> = Vec::new();
+
+    let mut buf = [0u8; MAX_NAME_LEN];
+    let mut lfn_buffer = LfnBuffer::new(&mut buf);
+    dir.iterate_dir_lfn(&mut lfn_buffer, |entry, lfn| {
         if !album_names.is_full() {
-            if file.attributes.is_directory() && !ignore_name(&file.name) {
-                album_names
-                    .push(
-                        String::from_utf8(Vec::from_slice(file.name.base_name()).unwrap()).unwrap(),
-                    )
-                    .unwrap()
+            if entry.attributes.is_directory() && !ignore_name(&entry.name) {
+                album_names.push(get_name(entry, lfn)).unwrap()
             }
         } else {
             warn!("Too many songs in album. increase MAX_DIRS");
@@ -134,16 +140,17 @@ async fn get_artist<'a>(dir: &Dir<'a>) -> Vec<Album<MAX_DIRS>, MAX_DIRS> {
     albums
 }
 
-async fn get_album<'a, const MAX_FILES: usize>(dir: &Dir<'a>) -> Vec<String<11>, MAX_FILES> {
-    let mut songs: Vec<String<11>, MAX_FILES> = Vec::new();
-    dir.iterate_dir(|file| {
+async fn get_album<'a, const MAX_FILES: usize>(
+    dir: &Dir<'a>,
+) -> Vec<String<MAX_NAME_LEN>, MAX_FILES> {
+    let mut songs: Vec<String<MAX_NAME_LEN>, MAX_FILES> = Vec::new();
+
+    let mut buf = [0u8; MAX_NAME_LEN];
+    let mut lfn_buffer = LfnBuffer::new(&mut buf);
+    dir.iterate_dir_lfn(&mut lfn_buffer, |entry, lfn| {
         if !songs.is_full() {
-            if !file.attributes.is_directory() && !ignore_name(&file.name) {
-                songs
-                    .push(
-                        String::from_utf8(Vec::from_slice(file.name.base_name()).unwrap()).unwrap(),
-                    )
-                    .unwrap()
+            if !entry.attributes.is_directory() && !ignore_name(&entry.name) {
+                songs.push(get_name(entry, lfn)).unwrap()
             }
         } else {
             warn!("Too many songs in album. increase MAX_FILES");
@@ -153,6 +160,14 @@ async fn get_album<'a, const MAX_FILES: usize>(dir: &Dir<'a>) -> Vec<String<11>,
     .unwrap();
 
     songs
+}
+
+fn get_name<'a>(entry: &DirEntry, lfn: Option<&'a str>) -> String<MAX_NAME_LEN> {
+    if let Some(lfn) = lfn {
+        String::from_str(lfn).unwrap()
+    } else {
+        String::from_utf8(Vec::from_slice(entry.name.base_name()).unwrap()).unwrap()
+    }
 }
 
 fn ignore_name(name: &ShortFileName) -> bool {
