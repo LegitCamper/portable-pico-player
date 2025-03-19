@@ -134,7 +134,7 @@ async fn reader(
 
     let mut library: Library = Library::new(volume);
     library.discover_music().await;
-    info!("music: discoverd {:?}", library.artists());
+    info!("music: discovererd {:?}", library.artists());
 
     let root = library.get_root_dir();
 
@@ -159,75 +159,70 @@ async fn reader(
             .await
             .unwrap();
 
-        let file: AudioFile<
-            AudioFile<SD, DummyTimeSource, MAX_DIRS, MAX_FILES, MAX_VOLUMES>,
-            DummyTimeSource,
-            MAX_DIRS,
-            MAX_FILES,
-            MAX_VOLUMES,
-        > = AudioFile::new_wav(song).await.unwrap();
+        let file: AudioFile<SD, DummyTimeSource, MAX_DIRS, MAX_FILES, MAX_VOLUMES> =
+            AudioFile::new_wav(song).await.unwrap();
 
-        // let sample_rate = library.sample_rate();
-        // let bit_depth = library.bit_depth();
+        let sample_rate = file.sample_rate;
+        let bit_depth = file.bit_depth;
 
-        // // Calculate the timeout as the time to fill the buffer (in seconds)
-        // let timeout_secs_f64 = BUFFER_SIZE as f64 / sample_rate as f64;
-        // let timeout_millis = (timeout_secs_f64 * 1000.0) as u64; // Convert seconds to milliseconds
-        // let timeout = Duration::from_millis(timeout_millis);
+        // Calculate the timeout as the time to fill the buffer (in seconds)
+        let timeout_secs_f64 = BUFFER_SIZE as f64 / sample_rate as f64;
+        let timeout_millis = (timeout_secs_f64 * 1000.0) as u64; // Convert seconds to milliseconds
+        let timeout = Duration::from_millis(timeout_millis);
 
-        // fill_back(&mut file_reader, &mut front_buffer).await;
-        // loop {
-        //     let start = Instant::now();
-        //     if file_reader.read() >= file_reader.end() {
-        //         info!("Reached end of audio file");
-        //         break;
-        //     }
+        fill_back(&mut file, &mut front_buffer).await;
+        loop {
+            let start = Instant::now();
+            if file.read >= file.end {
+                info!("Reached end of audio file");
+                break;
+            }
 
-        //     // Read the next chunk of data into the back buffer asynchronously while sending front buffer.
-        //     let back_buffer_fut = async {
-        //         if let Err(_) =
-        //             with_timeout(timeout, fill_back(&mut file_reader, &mut back_buffer)).await
-        //         {
-        //             info!("Filling with silence due to timeout.");
-        //             // Fill with silence bc reading took too long
-        //             back_buffer.fill(0);
-        //         }
-        //     };
+            // Read the next chunk of data into the back buffer asynchronously while sending front buffer.
+            let back_buffer_fut = async {
+                if let Err(_) = with_timeout(timeout, fill_back(&mut file, &mut back_buffer)).await
+                {
+                    info!("Filling with silence due to timeout.");
+                    // Fill with silence bc reading took too long
+                    back_buffer.fill(0);
+                }
+            };
 
-        //     // Write the front buffer data to the i2s DMA while the back buffer is being filled.
-        //     let dma_future = i2s.write(front_buffer);
+            // Write the front buffer data to the i2s DMA while the back buffer is being filled.
+            let dma_future = i2s.write(front_buffer);
 
-        //     // Execute the two tasks concurrently.
-        //     join(back_buffer_fut, dma_future).await;
+            // Execute the two tasks concurrently.
+            join(back_buffer_fut, dma_future).await;
 
-        //     // Synchronize the timing with the sample rate (e.g., 48kHz, 44.1kHz)
-        //     // Calculate the time elapsed since starting this loop
-        //     let elapsed = Instant::now().duration_since(start);
+            // Synchronize the timing with the sample rate (e.g., 48kHz, 44.1kHz)
+            // Calculate the time elapsed since starting this loop
+            let elapsed = Instant::now().duration_since(start);
 
-        //     // Calculate the time needed to fill the buffer based on sample rate and buffer size
-        //     let expected_fill_time =
-        //         Duration::from_millis((BUFFER_SIZE * 1000) as u64 / sample_rate as u64);
+            // Calculate the time needed to fill the buffer based on sample rate and buffer size
+            let expected_fill_time =
+                Duration::from_millis((BUFFER_SIZE * 1000) as u64 / sample_rate as u64);
 
-        //     // Adjust timing for any delays that have already occurred
-        //     let delay_duration = if elapsed < expected_fill_time {
-        //         expected_fill_time - elapsed
-        //     } else {
-        //         Duration::from_millis(0) // If we're behind, don't delay further
-        //     };
+            // Adjust timing for any delays that have already occurred
+            let delay_duration = if elapsed < expected_fill_time {
+                expected_fill_time - elapsed
+            } else {
+                Duration::from_millis(0) // If we're behind, don't delay further
+            };
 
-        //     // Wait for the next buffer to be ready
-        //     Timer::after(delay_duration).await;
+            // Wait for the next buffer to be ready
+            Timer::after(delay_duration).await;
 
-        //     mem::swap(&mut back_buffer, &mut front_buffer);
-        // }
+            mem::swap(&mut back_buffer, &mut front_buffer);
+        }
 
-        // // Close Audio File and get sd controller back
-        // sd_controller = file_reader.close();
+        file.destroy().close();
+        album.clone();
+        artist.clone();
     }
 }
 
 pub async fn fill_back(
-    file_reader: &mut FileReader<'_, Spi<'_, SPI0, spi::Async>, Output<'_>, BUFFER_SIZE>,
+    file_reader: &mut AudioFile<'_, SD, DummyTimeSource, MAX_DIRS, MAX_FILES, MAX_FILES>,
     back_buffer: &mut [u32],
 ) {
     let mut read_buf = [0u8; BUFFER_SIZE];
