@@ -5,7 +5,9 @@ use embassy_rp::{
     spi::{self, Spi},
 };
 use embedded_hal_bus::spi::ExclusiveDevice;
-use embedded_sdmmc::asynchronous::{Directory, SdCard, TimeSource, Timestamp, Volume};
+use embedded_sdmmc::asynchronous::{
+    Directory, SdCard, ShortFileName, TimeSource, Timestamp, Volume,
+};
 use heapless::{String, Vec};
 
 pub const MAX_DIRS: usize = 4;
@@ -55,7 +57,7 @@ impl<'a> Library<'a> {
         root_dir
             .iterate_dir(|file| {
                 if !artist_names.is_full() {
-                    if file.attributes.is_directory() {
+                    if file.attributes.is_directory() && !ignore_name(&file.name) {
                         artist_names
                             .push(
                                 String::from_utf8(Vec::from_slice(file.name.base_name()).unwrap())
@@ -97,16 +99,15 @@ async fn get_artist<'a>(dir: &Dir<'a>) -> Vec<Album<MAX_DIRS>, MAX_DIRS> {
     let mut album_names: Vec<String<11>, MAX_FILES> = Vec::new();
     dir.iterate_dir(|file| {
         if !album_names.is_full() {
-            if file.attributes.is_directory()
-                && str::from_utf8(file.name.base_name()).unwrap() != "."
-                || str::from_utf8(file.name.base_name()).unwrap() != ".."
-            {
+            if file.attributes.is_directory() && !ignore_name(&file.name) {
                 album_names
                     .push(
                         String::from_utf8(Vec::from_slice(file.name.base_name()).unwrap()).unwrap(),
                     )
                     .unwrap()
             }
+        } else {
+            warn!("Too many songs in album. increase MAX_DIRS");
         }
     })
     .await
@@ -137,10 +138,7 @@ async fn get_album<'a, const MAX_FILES: usize>(dir: &Dir<'a>) -> Vec<String<11>,
     let mut songs: Vec<String<11>, MAX_FILES> = Vec::new();
     dir.iterate_dir(|file| {
         if !songs.is_full() {
-            if !file.attributes.is_directory()
-                && str::from_utf8(file.name.base_name()).unwrap() != "."
-                || str::from_utf8(file.name.base_name()).unwrap() != ".."
-            {
+            if !file.attributes.is_directory() && !ignore_name(&file.name) {
                 songs
                     .push(
                         String::from_utf8(Vec::from_slice(file.name.base_name()).unwrap()).unwrap(),
@@ -155,4 +153,9 @@ async fn get_album<'a, const MAX_FILES: usize>(dir: &Dir<'a>) -> Vec<String<11>,
     .unwrap();
 
     songs
+}
+
+fn ignore_name(name: &ShortFileName) -> bool {
+    let name = str::from_utf8(name.base_name()).unwrap();
+    name == "." || name == ".." || name.contains("TRASH")
 }
