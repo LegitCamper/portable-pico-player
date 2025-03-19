@@ -37,31 +37,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "aligned"
-version = "0.3.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3a785a543aea40f5e4e2e93bb2655d31bc21bb391fff65697150973e383f16bb"
-dependencies = [
- "as-slice",
-]
-
-[[package]]
 name = "arrayvec"
 version = "0.7.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7c02d123df017efcdfbd739ef81735b36c5ba83ec3c59c80a9d7ecc718f92e50"
-
-[[package]]
-name = "as-slice"
-version = "0.1.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "45403b49e3954a4b8428a0ac21a4b7afadccf92bfd96273f1a58cd4812496ae0"
-dependencies = [
- "generic-array 0.12.4",
- "generic-array 0.13.3",
- "generic-array 0.14.7",
- "stable_deref_trait",
-]
 
 [[package]]
 name = "ascii-canvas"
@@ -90,8 +69,9 @@ checksum = "1505bd5d3d116872e7271a6d4e16d81d0c8570876c8de68093a09ac269d8aac0"
 [[package]]
 name = "audio_parser"
 version = "0.2.0"
+source = "git+https://github.com/LegitCamper/audio_parser?branch=async#13cac15c426714244681c077697fd39c2c2f9729"
 dependencies = [
- "embedded-sdmmc-async",
+ "embedded-sdmmc",
  "heapless 0.8.0",
 ]
 
@@ -138,14 +118,19 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "72b3254f16251a8381aa12e40e3c4d2f0199f8c6508fbecb9d91f575e0fbb8c6"
 
 [[package]]
-name = "bbqueue"
-version = "0.5.1"
+name = "bisync"
+version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fd3baa8859d1a4c7411039a75c0599a4640ef1c9a8fc811e4325b00e6cfe0a55"
+checksum = "5020822f6d6f23196ccaf55e228db36f9de1cf788052b37992e17cbc96ec41a7"
 dependencies = [
- "cortex-m 0.6.7",
- "defmt",
+ "bisync_macros",
 ]
+
+[[package]]
+name = "bisync_macros"
+version = "0.2.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d21f40d350a700f6aa107e45fb26448cf489d34794b2ba4522181dc9f1173af6"
 
 [[package]]
 name = "bit-set"
@@ -198,7 +183,7 @@ version = "0.10.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3078c7629b62d3f0439517fa394996acacc5cbc91c5a20d8c658e77abd503a71"
 dependencies = [
- "generic-array 0.14.7",
+ "generic-array",
 ]
 
 [[package]]
@@ -284,19 +269,6 @@ checksum = "773648b94d0e5d620f64f280777445740e61fe701025087ec8b57f45c791888b"
 
 [[package]]
 name = "cortex-m"
-version = "0.6.7"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9075300b07c6a56263b9b582c214d0ff037b00d45ec9fde1cc711490c56f1bb9"
-dependencies = [
- "aligned",
- "bare-metal",
- "bitfield",
- "cortex-m 0.7.7",
- "volatile-register",
-]
-
-[[package]]
-name = "cortex-m"
 version = "0.7.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8ec610d8f49840a5b376c69663b6369e71f4b34484b9b2eb29fb918d92516cb9"
@@ -363,7 +335,7 @@ version = "0.1.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1bfb12502f3fc46cca1bb51ac28df9d618d813cdc3d2f25b9fe775a34af26bb3"
 dependencies = [
- "generic-array 0.14.7",
+ "generic-array",
  "typenum",
 ]
 
@@ -373,7 +345,7 @@ version = "0.3.0"
 source = "git+https://github.com/embassy-rs/embassy.git?rev=17301c00e986c5b8536435ea31ebf5aaf13aed17#17301c00e986c5b8536435ea31ebf5aaf13aed17"
 dependencies = [
  "bt-hci",
- "cortex-m 0.7.7",
+ "cortex-m",
  "cortex-m-rt",
  "defmt",
  "embassy-futures",
@@ -539,7 +511,7 @@ name = "embassy-executor"
 version = "0.7.0"
 source = "git+https://github.com/embassy-rs/embassy.git?rev=17301c00e986c5b8536435ea31ebf5aaf13aed17#17301c00e986c5b8536435ea31ebf5aaf13aed17"
 dependencies = [
- "cortex-m 0.7.7",
+ "cortex-m",
  "critical-section",
  "defmt",
  "document-features",
@@ -567,7 +539,7 @@ name = "embassy-hal-internal"
 version = "0.2.0"
 source = "git+https://github.com/embassy-rs/embassy.git?rev=17301c00e986c5b8536435ea31ebf5aaf13aed17#17301c00e986c5b8536435ea31ebf5aaf13aed17"
 dependencies = [
- "cortex-m 0.7.7",
+ "cortex-m",
  "critical-section",
  "defmt",
  "num-traits",
@@ -595,7 +567,7 @@ source = "git+https://github.com/embassy-rs/embassy.git?rev=17301c00e986c5b85364
 dependencies = [
  "atomic-polyfill",
  "cfg-if",
- "cortex-m 0.7.7",
+ "cortex-m",
  "cortex-m-rt",
  "critical-section",
  "defmt",
@@ -739,6 +711,7 @@ checksum = "513e0b3a8fb7d3013a8ae17a834283f170deaf7d0eeab0a7c1a36ad4dd356d22"
 dependencies = [
  "critical-section",
  "embedded-hal 1.0.0",
+ "embedded-hal-async",
 ]
 
 [[package]]
@@ -771,14 +744,19 @@ dependencies = [
 ]
 
 [[package]]
-name = "embedded-sdmmc-async"
-version = "0.4.0"
-source = "git+https://github.com/LegitCamper/embedded-sdmmc-rs.git?branch=async#609acf628fadce9cad4bb720faf5bfef43fd2fd0"
+name = "embedded-sdmmc"
+version = "0.8.0"
+source = "git+https://github.com/Be-ing/embedded-sdmmc-rs?branch=bisync#7b15cf594ed038df271ad47e2bfc11277defe731"
 dependencies = [
+ "bisync",
  "byteorder",
- "defmt",
- "embedded-hal 0.2.7",
+ "embassy-futures",
+ "embedded-hal 1.0.0",
  "embedded-hal-async",
+ "embedded-io",
+ "embedded-io-async",
+ "heapless 0.8.0",
+ "log",
 ]
 
 [[package]]
@@ -998,24 +976,6 @@ dependencies = [
  "pin-project-lite",
  "pin-utils",
  "slab",
-]
-
-[[package]]
-name = "generic-array"
-version = "0.12.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ffdf9f34f1447443d37393cc6c2b8313aebddcd96906caf34e54c68d8e57d7bd"
-dependencies = [
- "typenum",
-]
-
-[[package]]
-name = "generic-array"
-version = "0.13.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f797e67af32588215eaaab8327027ee8e71b9dd0b2b26996aedf20c030fce309"
-dependencies = [
- "typenum",
 ]
 
 [[package]]
@@ -1767,7 +1727,7 @@ version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4047d9235d1423d66cc97da7d07eddb54d4f154d6c13805c6d0793956f4f25b0"
 dependencies = [
- "cortex-m 0.7.7",
+ "cortex-m",
  "defmt",
 ]
 
@@ -1836,10 +1796,9 @@ name = "pico-player"
 version = "0.1.0"
 dependencies = [
  "audio_parser",
- "bbqueue",
  "bt-hci",
  "byteorder",
- "cortex-m 0.7.7",
+ "cortex-m",
  "cortex-m-rt",
  "cyw43",
  "cyw43-pio",
@@ -1856,7 +1815,7 @@ dependencies = [
  "embedded-hal 0.2.7",
  "embedded-hal-async",
  "embedded-hal-bus",
- "embedded-sdmmc-async",
+ "embedded-sdmmc",
  "format_no_std",
  "futures",
  "heapless 0.8.0",
@@ -2110,7 +2069,7 @@ version = "7.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8af65855c40b2c35079514c5489abffc0429347fef25d8467ff98ad84b4322d3"
 dependencies = [
- "cortex-m 0.7.7",
+ "cortex-m",
  "cortex-m-rt",
 ]
 

@@ -16,7 +16,8 @@ use embassy_rp::pio::{self, Pio};
 use embassy_rp::pio_programs::i2s::{PioI2sOut, PioI2sOutProgram};
 use embassy_rp::spi::{self, Spi};
 use embassy_time::{Duration, Instant, Timer, with_timeout};
-use embedded_sdmmc_async::{Controller, SdMmcSpi};
+use embedded_hal_bus::spi::ExclusiveDevice;
+use embedded_sdmmc::asynchronous::{BlockDevice, SdCard, VolumeIdx, VolumeManager};
 use heapless::{String, Vec};
 use static_cell::StaticCell;
 use {defmt_rtt as _, panic_probe as _};
@@ -24,7 +25,7 @@ use {defmt_rtt as _, panic_probe as _};
 // mod ble;
 mod display;
 mod file_reader;
-use file_reader::Library;
+use file_reader::{DummyTimeSource, Library};
 
 bind_interrupts!(struct Irqs {
     // i2s
@@ -55,9 +56,9 @@ async fn main(spawner: Spawner) {
     media_ui.init();
 
     // Set up SPI0 for the Micro SD reader
-    let sdcard = {
+    let sdcard_block_device = {
         let mut config = spi::Config::default();
-        config.frequency = 65_000_000;
+        config.frequency = 16_000_000;
         let spi = spi::Spi::new(
             p.SPI0,
             p.PIN_2,
@@ -69,8 +70,8 @@ async fn main(spawner: Spawner) {
         );
         let cs = Output::new(p.PIN_5, Level::High);
 
-        let sd_card = SdMmcSpi::new(spi, cs);
-        sd_card
+        let device = ExclusiveDevice::new(spi, cs, embassy_time::Delay).unwrap();
+        device
     };
 
     // i2s DAC
@@ -102,39 +103,37 @@ async fn main(spawner: Spawner) {
             &program,
         )
     };
-    unwrap!(spawner.spawn(reader(sdcard, i2s)))
+    unwrap!(spawner.spawn(reader(sdcard_block_device, i2s)))
 }
 
 const BUFFER_SIZE: usize = 1024;
 
 #[embassy_executor::task]
 async fn reader(
-    mut sd_card: SdMmcSpi<Spi<'static, SPI0, spi::Async>, Output<'static>>,
+    mut block_device: ExclusiveDevice<
+        Spi<'static, SPI0, spi::Async>,
+        Output<'static>,
+        embassy_time::Delay,
+    >,
     mut _i2s: PioI2sOut<'static, PIO0, 0>,
 ) {
+    let sdcard = SdCard::new(block_device, embassy_time::Delay);
+    let volume_mgr = VolumeManager::new(sdcard, DummyTimeSource {});
+
     // Wait for sdcard
-    let block_device = {
+    let volume = {
         loop {
-            if let Ok(dev) = sd_card.acquire().await {
-                break dev;
+            if let Ok(vol) = volume_mgr.open_volume(VolumeIdx(0)).await {
+                break vol;
             }
             warn!("Could not init Sd card");
             Timer::after_millis(500).await;
         }
     };
 
-    let timesource = file_reader::DummyTimeSource {};
-    let mut sd_controller = Controller::new(block_device, timesource);
-    let mut library: Library<_, _, 5, 50, BUFFER_SIZE> = Library::new(sd_controller);
+    let mut library: Library = Library::new(volume);
     library.discover_music().await;
-
     info!("music: {:?}", library.artists());
-
-    // library.open("xo.wav").await;
-    // library.close();
-
-    // let music_files: file_reader::Library<> = discover_music(sd_controller).await;
-    // info!("Files: {:?}", music_files);
 
     // create two audio buffers (back and front) which will take turns being
     // filled with new audio data and being sent to the pio fifo using dma

@@ -40,7 +40,7 @@ cyw43-pio = { version = "0.3.0", features = ["defmt"] }
 defmt = "0.3"
 defmt-rtt = "0.4.0"
 
-embedded-hal-bus = "0.3.0"
+embedded-hal-bus = { version = "0.3.0", features = ["async"] }
 embedded-hal = "0.2.7"
 embedded-hal-async = "1.0.0"
 cortex-m = { version = "0.7.6" }
@@ -56,12 +56,9 @@ mipidsi = "0.9.0"
 embedded-graphics = { version = "0.8.1", features = ["defmt"] }
 embedded-graphics-core = { version = "0.4.0", features = ["defmt"] }
 
-embedded-sdmmc-async = { git = "https://github.com/LegitCamper/embedded-sdmmc-rs.git", branch = "async", features = [
-  "defmt-log",
-], default-features = false }
-bbqueue = { version = "0.5.1", features = ["cortex-m", "thumbv6", "defmt"] }
-# audio_parser = { git = "https://github.com/LegitCamper/audio_parser", branch = "async" }
-audio_parser = { path = "../audio_parser" }
+embedded-sdmmc = { git = "https://github.com/Be-ing/embedded-sdmmc-rs", branch = "bisync" }
+audio_parser = { git = "https://github.com/LegitCamper/audio_parser", branch = "async" }
+# audio_parser = { path = "../audio_parser" }
 
 
 trouble_audio = { git = "https://github.com/LegitCamper/trouble_audio/", features = [
