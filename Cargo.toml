@@ -56,9 +56,11 @@ mipidsi = "0.9.0"
 embedded-graphics = { version = "0.8.1", features = ["defmt"] }
 embedded-graphics-core = { version = "0.4.0", features = ["defmt"] }
 
-embedded-sdmmc = { git = "https://github.com/Be-ing/embedded-sdmmc-rs", branch = "bisync" }
-audio_parser = { git = "https://github.com/LegitCamper/audio_parser", branch = "async" }
-# audio_parser = { path = "../audio_parser" }
+embedded-sdmmc = { git = "https://github.com/Be-ing/embedded-sdmmc-rs", branch = "bisync", default-features = false, features = [
+  "defmt-log",
+] }
+# audio_parser = { git = "https://github.com/LegitCamper/audio_parser", branch = "async" }
+audio_parser = { path = "../audio_parser" }
 
 
 trouble_audio = { git = "https://github.com/LegitCamper/trouble_audio/", features = [
