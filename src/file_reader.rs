@@ -82,7 +82,6 @@ impl<'a> Library<'a> {
         let mut artists = Vec::new();
 
         for artist in artist_names {
-            info!("looking for {}", artist.as_str());
             let artist_dir = root_dir.open_dir(artist.as_str()).await.unwrap();
             artists
                 .push(Artist {

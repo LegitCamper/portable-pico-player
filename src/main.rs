@@ -18,7 +18,7 @@ use embassy_rp::pio_programs::i2s::{PioI2sOut, PioI2sOutProgram};
 use embassy_rp::spi::{self, Spi};
 use embassy_time::{Duration, Instant, Timer, with_timeout};
 use embedded_hal_bus::spi::ExclusiveDevice;
-use embedded_sdmmc::asynchronous::{BlockDevice, SdCard, VolumeIdx, VolumeManager};
+use embedded_sdmmc::asynchronous::{BlockDevice, SdCard, ShortFileName, VolumeIdx, VolumeManager};
 use heapless::{String, Vec};
 use static_cell::StaticCell;
 use {defmt_rtt as _, panic_probe as _};
@@ -133,6 +133,7 @@ async fn reader(
     };
 
     let mut library: Library = Library::new(volume);
+    info!("indexing music");
     library.discover_music().await;
     info!("music: discovererd {:?}", library.artists());
 
@@ -149,17 +150,17 @@ async fn reader(
         let artist = &library.artists().as_ref().unwrap()[0];
         let artist_dir = root.open_dir(artist.name.as_str()).await.unwrap();
         let album = &artist.albums[0];
-        let album_dir = root.open_dir(album.name.as_str()).await.unwrap();
+        let album_dir = artist_dir.open_dir(album.name.as_str()).await.unwrap();
         let song_name = &album.songs[0];
-        let song = root
+        let song = album_dir
             .open_file_in_dir(
-                song_name.as_str(),
+                ShortFileName::create_from_str(song_name.as_str()).unwrap(),
                 embedded_sdmmc::asynchronous::Mode::ReadOnly,
             )
             .await
             .unwrap();
 
-        let file: AudioFile<SD, DummyTimeSource, MAX_DIRS, MAX_FILES, MAX_VOLUMES> =
+        let mut file: AudioFile<SD, DummyTimeSource, MAX_DIRS, MAX_FILES, MAX_VOLUMES> =
             AudioFile::new_wav(song).await.unwrap();
 
         let sample_rate = file.sample_rate;
@@ -222,7 +223,7 @@ async fn reader(
 }
 
 pub async fn fill_back(
-    file_reader: &mut AudioFile<'_, SD, DummyTimeSource, MAX_DIRS, MAX_FILES, MAX_FILES>,
+    file_reader: &mut AudioFile<'_, SD, DummyTimeSource, MAX_DIRS, MAX_FILES, MAX_VOLUMES>,
     back_buffer: &mut [u32],
 ) {
     let mut read_buf = [0u8; BUFFER_SIZE];
