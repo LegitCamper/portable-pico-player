@@ -21,13 +21,19 @@ pub async fn play_file<'a>(
     let sample_rate = audio_file.sample_rate;
     let bit_depth = audio_file.bit_depth;
     let channels = audio_file.num_channels;
+    info!(
+        "Audio info:  {}hz, {}bit, {} channels",
+        sample_rate, bit_depth, channels
+    );
 
     // Calculate the timeout as the time to fill the buffer (in seconds)
     let timeout_secs_f64 = BUFFER_SIZE as f64 / sample_rate as f64;
     let timeout_millis = (timeout_secs_f64 * 1000.0) as u64; // Convert seconds to milliseconds
     let timeout = Duration::from_millis(timeout_millis);
 
-    fill_back(audio_file, &mut front_buffer, bit_depth, channels).await;
+    let gain = 4.0;
+
+    fill_back(audio_file, &mut front_buffer, bit_depth, channels, gain).await;
     loop {
         let start = Instant::now();
         if audio_file.read >= audio_file.end {
@@ -37,7 +43,7 @@ pub async fn play_file<'a>(
 
         // Read the next chunk of data into the back buffer asynchronously while sending front buffer.
         let back_buffer_fut = async {
-            fill_back(audio_file, &mut back_buffer, bit_depth, channels).await
+            fill_back(audio_file, &mut back_buffer, bit_depth, channels, gain).await
             // if let Err(_) = with_timeout(
             //     timeout,
             //     fill_back(audio_file, &mut back_buffer, bit_depth, channels),
@@ -83,6 +89,7 @@ pub async fn fill_back(
     back_buffer: &mut [u32],
     bit_depth: u16,
     channels: u16,
+    gain: f32,
 ) {
     let mut read_buf = [0u8; BUFFER_SIZE * 3]; // for 24 bit audio
     let mut read_slice = &mut read_buf[..BUFFER_SIZE * (bit_depth / 8) as usize];
@@ -97,6 +104,11 @@ pub async fn fill_back(
     // ...
 
     to_uniform_stereo_32(read_slice, back_buffer, bit_depth, channels);
+    back_buffer.iter_mut().for_each(|sample| {
+        let left = apply_gain((*sample >> 16) as u16, gain);
+        let right = apply_gain(*sample as u16, gain);
+        *sample = (left as u32) << 16 | right as u32;
+    });
 }
 
 // converts any bit rate and channel into 32bit stereo audio
@@ -147,4 +159,14 @@ fn to_uniform_stereo_32(in_buf: &mut [u8], out_buf: &mut [u32], bit_depth: u16, 
             panic!("unsupported bit depth")
         }
     }
+}
+
+fn apply_gain(sample: u16, gain: f32) -> u16 {
+    // Scale the sample by the gain value
+    let scaled_sample = sample as f32 * gain;
+
+    // Convert the scaled sample back to an integer using rounding
+    let rounded_sample = (scaled_sample + 0.5) as u16;
+
+    return rounded_sample;
 }

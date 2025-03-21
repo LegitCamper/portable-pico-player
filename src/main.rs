@@ -124,7 +124,7 @@ async fn reader(
                 break vol;
             }
             warn!("Could not init Sd card");
-            Timer::after_millis(500).await;
+            Timer::after_millis(100).await;
         }
     };
 
