@@ -4,24 +4,23 @@
 
 use audio_parser::AudioFile;
 use core::default::Default;
-use core::mem;
-use defmt::{error, info, panic, unwrap, warn};
+use defmt::{info, unwrap, warn};
 use display::{Display, MediaUi};
 use embassy_executor::Spawner;
-use embassy_futures::join::join;
 use embassy_rp::bind_interrupts;
 use embassy_rp::gpio::{Level, Output};
 use embassy_rp::peripherals::{DMA_CH2, I2C0, I2C1, PIN_2, PIN_3, PIN_4, PIN_5, PIO0, PIO1, SPI0};
 use embassy_rp::pio::{self, Pio};
 use embassy_rp::pio_programs::i2s::{PioI2sOut, PioI2sOutProgram};
 use embassy_rp::spi::{self, Spi};
-use embassy_time::{Duration, Instant, Timer, with_timeout};
+use embassy_time::Timer;
 use embedded_hal_bus::spi::ExclusiveDevice;
 use embedded_sdmmc::asynchronous::{File, SdCard, ShortFileName, VolumeIdx, VolumeManager};
-use static_cell::StaticCell;
 use {defmt_rtt as _, panic_probe as _};
 
 // mod ble;
+mod audio_playback;
+use audio_playback::play_file;
 mod display;
 mod file_reader;
 use file_reader::{DummyTimeSource, Library, MAX_DIRS, MAX_FILES, MAX_VOLUMES, SD};
@@ -105,8 +104,6 @@ async fn main(spawner: Spawner) {
     unwrap!(spawner.spawn(reader(sdcard_block_device, i2s)))
 }
 
-const BUFFER_SIZE: usize = 256;
-
 #[embassy_executor::task]
 async fn reader(
     block_device: ExclusiveDevice<
@@ -131,13 +128,6 @@ async fn reader(
         }
     };
 
-    // create two audio buffers (back and front) which will take turns being
-    // filled with new audio data and being sent to the pio fifo using dma
-    // *2 is buffer swapping not stereo
-    static DMA_BUFFER: StaticCell<[u32; BUFFER_SIZE * 2]> = StaticCell::new();
-    let dma_buffer = DMA_BUFFER.init_with(|| [0u32; BUFFER_SIZE * 2]);
-    let (mut back_buffer, mut front_buffer) = dma_buffer.split_at_mut(BUFFER_SIZE);
-
     let mut library: Library = Library::new(volume);
     info!("indexing music");
     library.discover_music().await;
@@ -150,7 +140,7 @@ async fn reader(
         let artist_dir = root.open_dir(artist.name.as_str()).await.unwrap();
         let album = &artist.albums[0];
         let album_dir = artist_dir.open_dir(album.name.as_str()).await.unwrap();
-        let song_name = &album.songs[0];
+        let song_name = &album.songs[3];
         let file = album_dir
             .open_file_in_dir(
                 ShortFileName::create_from_str(song_name.as_str()).unwrap(),
@@ -162,148 +152,11 @@ async fn reader(
         let mut audio_file: AudioFile<SD, DummyTimeSource, MAX_DIRS, MAX_FILES, MAX_VOLUMES> =
             AudioFile::new_wav(file).await.unwrap();
 
-        // play_file(
-        //     &mut i2s,
-        //     back_buffer.as_mut(),
-        //     front_buffer.as_mut(),
-        //     &mut audio_file,
-        // )
-        // .await;
-        // should be func
-        {
-            let sample_rate = audio_file.sample_rate;
-            let bit_depth = audio_file.bit_depth;
-            let channels = audio_file.num_channels;
-
-            // Calculate the timeout as the time to fill the buffer (in seconds)
-            let timeout_secs_f64 = BUFFER_SIZE as f64 / sample_rate as f64;
-            let timeout_millis = (timeout_secs_f64 * 1000.0) as u64; // Convert seconds to milliseconds
-            let timeout = Duration::from_millis(timeout_millis);
-
-            fill_back(&mut audio_file, &mut front_buffer, bit_depth, channels).await;
-            loop {
-                let start = Instant::now();
-                if audio_file.read >= audio_file.end {
-                    info!("Reached end of audio file");
-                    break;
-                }
-
-                // Read the next chunk of data into the back buffer asynchronously while sending front buffer.
-                let back_buffer_fut = async {
-                    fill_back(&mut audio_file, &mut back_buffer, bit_depth, channels).await
-                    // if let Err(_) = with_timeout(
-                    //     timeout,
-                    //     fill_back(&mut file, &mut back_buffer, bit_depth, channels),
-                    // )
-                    // .await
-                    // {
-                    //     info!("Filling with silence due to timeout.");
-                    //     // Fill with silence bc reading took too long
-                    //     back_buffer.fill(0);
-                    // }
-                };
-
-                // Write the front buffer data to the i2s DMA while the back buffer is being filled.
-                let dma_future = i2s.write(&mut front_buffer);
-
-                // Execute the two tasks concurrently.
-                join(back_buffer_fut, dma_future).await;
-
-                // Synchronize the timing with the sample rate (e.g., 48kHz, 44.1kHz)
-                // Calculate the time elapsed since starting this loop
-                let elapsed = Instant::now().duration_since(start);
-
-                // Calculate the time needed to fill the buffer based on sample rate and buffer size
-                let expected_fill_time =
-                    Duration::from_millis((BUFFER_SIZE * 1000) as u64 / sample_rate as u64);
-
-                // Adjust timing for any delays that have already occurred
-                let delay_duration = if elapsed < expected_fill_time {
-                    expected_fill_time - elapsed
-                } else {
-                    Duration::from_millis(0) // If we're behind, don't delay further
-                };
-
-                // Wait for the next buffer to be ready
-                Timer::after(delay_duration).await;
-
-                mem::swap(&mut back_buffer, &mut front_buffer);
-            }
-        }
+        info!("playing {}", song_name);
+        play_file(&mut i2s, &mut audio_file).await;
 
         audio_file.destroy().close().await.unwrap();
         album_dir.close().unwrap();
         artist_dir.close().unwrap();
-    }
-}
-
-pub async fn fill_back(
-    file_reader: &mut AudioFile<'_, SD, DummyTimeSource, MAX_DIRS, MAX_FILES, MAX_VOLUMES>,
-    back_buffer: &mut [u32],
-    bit_depth: u16,
-    channels: u16,
-) {
-    let mut read_buf = [0u8; BUFFER_SIZE * 3]; // for 24 bit audio
-    let mut read_slice = &mut read_buf[..BUFFER_SIZE * (bit_depth / 8) as usize];
-
-    // read a frame of audio data from the sd card
-    if let Err(e) = file_reader.read_exact(&mut read_slice).await {
-        // Probably bc future was canceled
-        error!("Failed to read next audio buffer: {}", e)
-    }
-
-    // decode if necisary
-    // ...
-
-    to_uniform_stereo_32(read_slice, back_buffer, bit_depth, channels);
-}
-
-// converts any bit rate and channel into 32bit stereo audio
-fn to_uniform_stereo_32(in_buf: &mut [u8], out_buf: &mut [u32], bit_depth: u16, channels: u16) {
-    match bit_depth {
-        8 => {
-            if channels == 1 {
-                out_buf
-                    .iter_mut()
-                    .zip(in_buf.as_ref())
-                    .for_each(|(dma, read)| {
-                        *dma = (*read as u32) << 16 | *read as u32;
-                    });
-            } else if channels == 2 {
-                out_buf
-                    .iter_mut()
-                    .zip(in_buf.as_ref().chunks(2)) // get both L&R interleaved samples
-                    .for_each(|(dma, read)| {
-                        *dma = (read[0] as u32) << 16 | read[1] as u32;
-                    });
-            } else {
-                panic!("unsupported number of channels")
-            }
-        }
-        16 => {
-            if channels == 1 {
-                out_buf
-                    .iter_mut()
-                    .zip(in_buf.as_ref().chunks(2))
-                    .for_each(|(dma, read)| {
-                        let read = (read[0] as u16) << 8 | (read[1] as u16); // convert 2 bytes to 16bit
-                        *dma = (read as u32) << 16 | read as u32;
-                    });
-            } else if channels == 2 {
-                out_buf
-                    .iter_mut()
-                    .zip(in_buf.as_ref().chunks(4)) // get both L&R interleaved samples
-                    .for_each(|(dma, read)| {
-                        let l_read = (read[0] as u16) << 8 | (read[1] as u16); // convert 2 bytes to 16bit - Left
-                        let r_read = (read[1] as u16) << 8 | (read[2] as u16); // convert 2 bytes to 16bit - Right
-                        *dma = (l_read as u32) << 16 | r_read as u32;
-                    });
-            } else {
-                panic!("unsupported number of channels")
-            }
-        }
-        _ => {
-            panic!("unsupported bit depth")
-        }
     }
 }
