@@ -1,6 +1,4 @@
 use core::str::FromStr;
-
-use audio_parser::AudioFile;
 use defmt::{Format, info, warn};
 use embassy_rp::{
     gpio::Output,
@@ -9,7 +7,7 @@ use embassy_rp::{
 };
 use embedded_hal_bus::spi::ExclusiveDevice;
 use embedded_sdmmc::asynchronous::{
-    DirEntry, Directory, LfnBuffer, Mode, SdCard, ShortFileName, TimeSource, Timestamp, Volume,
+    DirEntry, Directory, LfnBuffer, SdCard, ShortFileName, TimeSource, Timestamp, Volume,
 };
 use heapless::{String, Vec};
 
