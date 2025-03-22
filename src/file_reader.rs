@@ -12,21 +12,21 @@ use embedded_sdmmc::asynchronous::{
 use heapless::{String, Vec};
 
 pub const MAX_DIRS: usize = 4;
-pub const MAX_FILES: usize = 4;
+pub const MAX_FILES: usize = 5;
 pub const MAX_VOLUMES: usize = 1;
 // Max file or dir name string len
 pub const MAX_NAME_LEN: usize = 25;
 
 #[derive(Debug, Format)]
-pub struct Album<const MAX_FILES: usize> {
+pub struct Album {
     pub name: String<MAX_NAME_LEN>,
     pub songs: Vec<String<MAX_NAME_LEN>, MAX_FILES>,
 }
 
 #[derive(Debug, Format)]
-pub struct Artist<const MAX_DIRS: usize, const MAX_FILES: usize> {
+pub struct Artist {
     pub name: String<MAX_NAME_LEN>,
-    pub albums: Vec<Album<MAX_FILES>, MAX_DIRS>,
+    pub albums: Vec<Album, MAX_DIRS>,
 }
 
 pub struct DummyTimeSource {}
@@ -42,7 +42,7 @@ type Dir<'a> = Directory<'a, SD, DummyTimeSource, MAX_DIRS, MAX_FILES, MAX_VOLUM
 
 pub struct Library<'a> {
     volume: Volume<'a, SD, DummyTimeSource, MAX_DIRS, MAX_FILES, MAX_VOLUMES>,
-    artists: Option<Vec<Artist<MAX_DIRS, MAX_FILES>, MAX_DIRS>>,
+    artists: Option<Vec<Artist, MAX_DIRS>>,
 }
 
 impl<'a> Library<'a> {
@@ -94,12 +94,12 @@ impl<'a> Library<'a> {
         self.artists = Some(artists)
     }
 
-    pub fn artists(&self) -> Option<&Vec<Artist<MAX_DIRS, MAX_FILES>, MAX_DIRS>> {
+    pub fn artists(&self) -> Option<&Vec<Artist, MAX_DIRS>> {
         self.artists.as_ref()
     }
 }
 
-async fn get_artist<'a>(dir: &Dir<'a>) -> Vec<Album<MAX_DIRS>, MAX_DIRS> {
+async fn get_artist<'a>(dir: &Dir<'a>) -> Vec<Album, MAX_DIRS> {
     let mut album_names: Vec<String<MAX_NAME_LEN>, MAX_FILES> = Vec::new();
 
     let mut buf = [0u8; MAX_NAME_LEN];

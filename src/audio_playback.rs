@@ -89,8 +89,10 @@ pub async fn fill_back(
     channels: u16,
     gain: f32,
 ) {
-    let mut read_buf = [0u8; BUFFER_SIZE * 3]; // for 24 bit audio
-    let mut read_slice = &mut read_buf[..BUFFER_SIZE * (bit_depth / 8) as usize];
+    assert!(channels <= 2); // the buffer below assumes mono or stereo only
+    let mut read_buf = [0u8; BUFFER_SIZE * 3 * 2]; // 3 for 24 bit audio & 2 for stereo
+    let mut read_slice =
+        &mut read_buf[..BUFFER_SIZE * (bit_depth / 8) as usize * channels as usize];
 
     // read a frame of audio data from the sd card
     if let Err(e) = file_reader.read_exact(&mut read_slice).await {
@@ -112,6 +114,7 @@ pub async fn fill_back(
 // converts any bit rate and channel into 32bit stereo audio
 fn to_uniform_stereo_32(in_buf: &mut [u8], out_buf: &mut [u32], bit_depth: u16, channels: u16) {
     match bit_depth {
+        // unsigned 8bit audio
         8 => {
             if channels == 1 {
                 out_buf
@@ -131,23 +134,32 @@ fn to_uniform_stereo_32(in_buf: &mut [u8], out_buf: &mut [u32], bit_depth: u16, 
                 panic!("unsupported number of channels")
             }
         }
+        // signed 16bit audio
         16 => {
             if channels == 1 {
                 out_buf
                     .iter_mut()
                     .zip(in_buf.as_ref().chunks(2))
                     .for_each(|(dma, read)| {
-                        let read = (read[0] as u16) << 8 | (read[1] as u16); // convert 2 bytes to 16bit
-                        *dma = (read as u32) << 16 | read as u32;
+                        // Combine two bytes into a signed 16-bit value
+                        let read = ((read[0] as i8) as i16) << 8 | (read[1] as u8) as i16; // correctly interpret as signed
+                        // Sign extend to 32-bit and pack into u32
+                        let signed_value = read as i32;
+                        *dma = (signed_value << 16) as u32 | signed_value as u32;
                     });
             } else if channels == 2 {
                 out_buf
                     .iter_mut()
                     .zip(in_buf.as_ref().chunks(4)) // get both L&R interleaved samples
                     .for_each(|(dma, read)| {
-                        let l_read = (read[0] as u16) << 8 | (read[1] as u16); // convert 2 bytes to 16bit - Left
-                        let r_read = (read[2] as u16) << 8 | (read[3] as u16); // convert 2 bytes to 16bit - Right
-                        *dma = (l_read as u32) << 16 | r_read as u32;
+                        // Left channel
+                        let l_read = ((read[0] as i8) as i16) << 8 | (read[1] as u8) as i16;
+                        // Right channel
+                        let r_read = ((read[2] as i8) as i16) << 8 | (read[3] as u8) as i16;
+                        // Sign extend to 32-bit and pack into u32
+                        let l_signed_value = l_read as i32;
+                        let r_signed_value = r_read as i32;
+                        *dma = (l_signed_value << 16) as u32 | r_signed_value as u32;
                     });
             } else {
                 panic!("unsupported number of channels")

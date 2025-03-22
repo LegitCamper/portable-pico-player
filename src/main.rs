@@ -114,7 +114,11 @@ async fn reader(
     mut i2s: PioI2sOut<'static, PIO0, 0>,
 ) {
     let sdcard = SdCard::new(block_device, embassy_time::Delay);
-    let volume_mgr = VolumeManager::new(sdcard, DummyTimeSource {});
+    let volume_mgr = VolumeManager::<_, _, MAX_DIRS, MAX_FILES, MAX_VOLUMES>::new_with_limits(
+        sdcard,
+        DummyTimeSource {},
+        5000,
+    );
 
     // Wait for sdcard
     let volume = {
@@ -124,7 +128,7 @@ async fn reader(
                 break vol;
             }
             warn!("Could not init Sd card");
-            Timer::after_millis(100).await;
+            Timer::after_millis(50).await;
         }
     };
 
@@ -140,7 +144,7 @@ async fn reader(
         let artist_dir = root.open_dir(artist.name.as_str()).await.unwrap();
         let album = &artist.albums[0];
         let album_dir = artist_dir.open_dir(album.name.as_str()).await.unwrap();
-        let song_name = &album.songs[1];
+        let song_name = &album.songs[4];
         let file = album_dir
             .open_file_in_dir(
                 ShortFileName::create_from_str(song_name.as_str()).unwrap(),
