@@ -144,7 +144,7 @@ async fn reader(
         let artist_dir = root.open_dir(artist.name.as_str()).await.unwrap();
         let album = &artist.albums[0];
         let album_dir = artist_dir.open_dir(album.name.as_str()).await.unwrap();
-        let song_name = &album.songs[4];
+        let song_name = &album.songs[2];
         let file = album_dir
             .open_file_in_dir(
                 ShortFileName::create_from_str(song_name.as_str()).unwrap(),

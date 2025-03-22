@@ -34,7 +34,7 @@ pub async fn play_file<'a>(
         expected_fill_time.as_millis()
     );
 
-    let gain = 5.0;
+    let gain = 1.0;
 
     fill_back(audio_file, &mut front_buffer, bit_depth, channels, gain).await;
     loop {
@@ -104,15 +104,21 @@ pub async fn fill_back(
     // ...
 
     to_uniform_stereo_32(read_slice, back_buffer, bit_depth, channels);
-    back_buffer.iter_mut().for_each(|sample| {
-        let left = apply_gain((*sample >> 16) as u16, gain);
-        let right = apply_gain(*sample as u16, gain);
-        *sample = (left as u32) << 16 | right as u32;
-    });
+
+    // add gain if needed
+    // back_buffer.iter_mut().for_each(|sample| {
+    //     let left = apply_gain((*sample >> 16) as u16, gain);
+    //     let right = apply_gain(*sample as u16, gain);
+    //     *sample = (left as u32) << 16 | right as u32;
+    // });
 }
 
 // converts any bit rate and channel into 32bit stereo audio
 fn to_uniform_stereo_32(in_buf: &mut [u8], out_buf: &mut [u32], bit_depth: u16, channels: u16) {
+    if channels > 2 {
+        panic!("unsupported number of channels")
+    }
+
     match bit_depth {
         // unsigned 8bit audio
         8 => {
@@ -121,17 +127,20 @@ fn to_uniform_stereo_32(in_buf: &mut [u8], out_buf: &mut [u32], bit_depth: u16, 
                     .iter_mut()
                     .zip(in_buf.as_ref())
                     .for_each(|(dma, read)| {
-                        *dma = (*read as u32) << 16 | *read as u32;
+                        // because u8 is so quiet after conversion add gain to normalize it
+                        let read_boosted = apply_gain(*read as u16, 128.) as u32;
+                        *dma = read_boosted << 16 | read_boosted;
                     });
             } else if channels == 2 {
                 out_buf
                     .iter_mut()
                     .zip(in_buf.as_ref().chunks(2)) // get both L&R interleaved samples
                     .for_each(|(dma, read)| {
-                        *dma = (read[0] as u32) << 16 | read[1] as u32;
+                        // because u8 is so quiet after conversion add gain to normalize it
+                        let l_read_boosted = apply_gain(read[0] as u16, 128.) as u32;
+                        let r_read_boosted = apply_gain(read[0] as u16, 128.) as u32;
+                        *dma = l_read_boosted << 16 | r_read_boosted;
                     });
-            } else {
-                panic!("unsupported number of channels")
             }
         }
         // signed 16bit audio
@@ -141,28 +150,18 @@ fn to_uniform_stereo_32(in_buf: &mut [u8], out_buf: &mut [u32], bit_depth: u16, 
                     .iter_mut()
                     .zip(in_buf.as_ref().chunks(2))
                     .for_each(|(dma, read)| {
-                        // Combine two bytes into a signed 16-bit value
-                        let read = ((read[0] as i8) as i16) << 8 | (read[1] as u8) as i16; // correctly interpret as signed
-                        // Sign extend to 32-bit and pack into u32
-                        let signed_value = read as i32;
-                        *dma = (signed_value << 16) as u32 | signed_value as u32;
+                        let read = i16::from_le_bytes([read[0], read[1]]) as u32;
+                        *dma = (read) << 16 | read;
                     });
             } else if channels == 2 {
                 out_buf
                     .iter_mut()
                     .zip(in_buf.as_ref().chunks(4)) // get both L&R interleaved samples
                     .for_each(|(dma, read)| {
-                        // Left channel
-                        let l_read = ((read[0] as i8) as i16) << 8 | (read[1] as u8) as i16;
-                        // Right channel
-                        let r_read = ((read[2] as i8) as i16) << 8 | (read[3] as u8) as i16;
-                        // Sign extend to 32-bit and pack into u32
-                        let l_signed_value = l_read as i32;
-                        let r_signed_value = r_read as i32;
-                        *dma = (l_signed_value << 16) as u32 | r_signed_value as u32;
+                        let l_read = i16::from_le_bytes([read[0], read[1]]);
+                        let r_read = i16::from_le_bytes([read[2], read[3]]);
+                        *dma = (l_read as u32) << 16 | r_read as u32;
                     });
-            } else {
-                panic!("unsupported number of channels")
             }
         }
         _ => {
