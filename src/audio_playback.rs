@@ -6,7 +6,7 @@ use embassy_futures::join::join;
 use embassy_rp::{peripherals::PIO0, pio_programs::i2s::PioI2sOut};
 use embassy_time::{Duration, Instant, Timer, with_timeout};
 
-const BUFFER_SIZE: usize = 256;
+const BUFFER_SIZE: usize = 512;
 
 pub async fn play_file<'a>(
     i2s: &mut PioI2sOut<'static, PIO0, 0>,
@@ -26,12 +26,15 @@ pub async fn play_file<'a>(
         sample_rate, bit_depth, channels
     );
 
-    // Calculate the timeout as the time to fill the buffer (in seconds)
-    let timeout_secs_f64 = BUFFER_SIZE as f64 / sample_rate as f64;
-    let timeout_millis = (timeout_secs_f64 * 1000.0) as u64; // Convert seconds to milliseconds
-    let timeout = Duration::from_millis(timeout_millis);
+    // Calculate the time needed to fill the buffer based on sample rate and buffer size
+    let expected_fill_time =
+        Duration::from_millis((BUFFER_SIZE * 1000) as u64 / sample_rate as u64);
+    info!(
+        "Expected time to fill audio buffer: {}ms",
+        expected_fill_time.as_millis()
+    );
 
-    let gain = 4.0;
+    let gain = 5.0;
 
     fill_back(audio_file, &mut front_buffer, bit_depth, channels, gain).await;
     loop {
@@ -43,17 +46,16 @@ pub async fn play_file<'a>(
 
         // Read the next chunk of data into the back buffer asynchronously while sending front buffer.
         let back_buffer_fut = async {
-            fill_back(audio_file, &mut back_buffer, bit_depth, channels, gain).await
-            // if let Err(_) = with_timeout(
-            //     timeout,
-            //     fill_back(audio_file, &mut back_buffer, bit_depth, channels),
-            // )
-            // .await
-            // {
-            //     info!("Filling with silence due to timeout.");
-            //     // Fill with silence bc reading took too long
-            //     back_buffer.fill(0);
-            // }
+            if let Err(_) = with_timeout(
+                expected_fill_time,
+                fill_back(audio_file, &mut back_buffer, bit_depth, channels, gain),
+            )
+            .await
+            {
+                info!("Filling with silence due to timeout.");
+                // Fill with silence bc reading took too long
+                back_buffer.fill(0);
+            }
         };
 
         // Write the front buffer data to the i2s DMA while the back buffer is being filled.
@@ -65,10 +67,6 @@ pub async fn play_file<'a>(
         // Synchronize the timing with the sample rate (e.g., 48kHz, 44.1kHz)
         // Calculate the time elapsed since starting this loop
         let elapsed = Instant::now().duration_since(start);
-
-        // Calculate the time needed to fill the buffer based on sample rate and buffer size
-        let expected_fill_time =
-            Duration::from_millis((BUFFER_SIZE * 1000) as u64 / sample_rate as u64);
 
         // Adjust timing for any delays that have already occurred
         let delay_duration = if elapsed < expected_fill_time {

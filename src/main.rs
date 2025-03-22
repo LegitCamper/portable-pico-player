@@ -83,9 +83,9 @@ async fn main(spawner: Spawner) {
             mut common, sm0, ..
         } = Pio::new(p.PIO0, Irqs);
 
-        let bit_clock_pin = p.PIN_18;
-        let left_right_clock_pin = p.PIN_19;
-        let data_pin = p.PIN_20;
+        let bit_clock_pin = p.PIN_18; // bclk
+        let left_right_clock_pin = p.PIN_19; // wsel
+        let data_pin = p.PIN_20; // din
 
         let program = PioI2sOutProgram::new(&mut common);
         PioI2sOut::new(
@@ -140,7 +140,7 @@ async fn reader(
         let artist_dir = root.open_dir(artist.name.as_str()).await.unwrap();
         let album = &artist.albums[0];
         let album_dir = artist_dir.open_dir(album.name.as_str()).await.unwrap();
-        let song_name = &album.songs[3];
+        let song_name = &album.songs[1];
         let file = album_dir
             .open_file_in_dir(
                 ShortFileName::create_from_str(song_name.as_str()).unwrap(),
