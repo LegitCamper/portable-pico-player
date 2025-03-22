@@ -90,9 +90,8 @@ pub async fn fill_back(
     gain: f32,
 ) {
     assert!(channels <= 2); // the buffer below assumes mono or stereo only
-    let mut read_buf = [0u8; BUFFER_SIZE * 3 * 2]; // 3 for 24 bit audio & 2 for stereo
-    let mut read_slice =
-        &mut read_buf[..BUFFER_SIZE * (bit_depth / 8) as usize * channels as usize];
+    let mut read_buf = [0u8; BUFFER_SIZE * 4]; // 2 for 16bit audio & 2 for stereo
+    let mut read_slice = &mut read_buf[..(BUFFER_SIZE * ((bit_depth / 8) * channels) as usize)];
 
     // read a frame of audio data from the sd card
     if let Err(e) = file_reader.read_exact(&mut read_slice).await {
@@ -138,7 +137,7 @@ fn to_uniform_stereo_32(in_buf: &mut [u8], out_buf: &mut [u32], bit_depth: u16, 
                     .for_each(|(dma, read)| {
                         // because u8 is so quiet after conversion add gain to normalize it
                         let l_read_boosted = apply_gain(read[0] as u16, 128.) as u32;
-                        let r_read_boosted = apply_gain(read[0] as u16, 128.) as u32;
+                        let r_read_boosted = apply_gain(read[1] as u16, 128.) as u32;
                         *dma = l_read_boosted << 16 | r_read_boosted;
                     });
             }
