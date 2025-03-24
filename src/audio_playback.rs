@@ -34,9 +34,7 @@ pub async fn play_file<'a>(
         expected_fill_time.as_millis()
     );
 
-    let gain = 1.0;
-
-    fill_back(audio_file, &mut front_buffer, bit_depth, channels, gain).await;
+    fill_back(audio_file, &mut front_buffer, bit_depth, channels).await;
     loop {
         let start = Instant::now();
         if audio_file.read >= audio_file.end {
@@ -44,22 +42,23 @@ pub async fn play_file<'a>(
             break;
         }
 
-        // Read the next chunk of data into the back buffer asynchronously while sending front buffer.
-        let back_buffer_fut = async {
-            if let Err(_) = with_timeout(
-                expected_fill_time,
-                fill_back(audio_file, &mut back_buffer, bit_depth, channels, gain),
-            )
-            .await
-            {
-                info!("Filling with silence due to timeout.");
-                // Fill with silence bc reading took too long
-                back_buffer.fill(0);
-            }
-        };
-
         // Write the front buffer data to the i2s DMA while the back buffer is being filled.
         let dma_future = i2s.write(&mut front_buffer);
+
+        // Read the next chunk of data into the back buffer asynchronously while sending front buffer.
+        let back_buffer_fut = async {
+            fill_back(audio_file, &mut back_buffer, bit_depth, channels).await;
+            // if let Err(_) = with_timeout(
+            //     expected_fill_time,
+            //     fill_back(audio_file, &mut back_buffer, bit_depth, channels ),
+            // )
+            // .await
+            // {
+            //     info!("Filling with silence due to timeout.");
+            //     // Fill with silence bc reading took too long
+            //     back_buffer.fill(0);
+            // }
+        };
 
         // Execute the two tasks concurrently.
         join(back_buffer_fut, dma_future).await;
@@ -75,10 +74,10 @@ pub async fn play_file<'a>(
             Duration::from_millis(0) // If we're behind, don't delay further
         };
 
+        mem::swap(&mut back_buffer, &mut front_buffer);
+
         // Wait for the next buffer to be ready
         Timer::after(delay_duration).await;
-
-        mem::swap(&mut back_buffer, &mut front_buffer);
     }
 }
 
@@ -87,7 +86,6 @@ pub async fn fill_back(
     back_buffer: &mut [u32],
     bit_depth: u16,
     channels: u16,
-    gain: f32,
 ) {
     assert!(channels <= 2); // the buffer below assumes mono or stereo only
     let mut read_buf = [0u8; BUFFER_SIZE * 4]; // 2 for 16bit audio & 2 for stereo
