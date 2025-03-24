@@ -15,7 +15,7 @@ embassy-time = { version = "0.4.0", default-features = false, features = [
   "defmt",
   "defmt-timestamp-uptime",
 ] }
-embassy-rp = { version = "0.3.0", features = [
+embassy-rp = { version = "0.4.0", features = [
   "defmt",
   "critical-section-impl",
   "time-driver",
@@ -35,7 +35,7 @@ cyw43 = { version = "0.3.0", features = [
   "firmware-logs",
   "bluetooth",
 ] }
-cyw43-pio = { version = "0.3.0", features = ["defmt"] }
+cyw43-pio = { version = "0.4.0", features = ["defmt"] }
 
 defmt = "0.3"
 defmt-rtt = "0.4.0"
@@ -76,12 +76,20 @@ skip-cyw43-firmware = []
 bluetooth = ["dep:trouble_audio"]
 
 [patch.crates-io]
-embassy-executor = { git = "https://github.com/embassy-rs/embassy.git", rev = "17301c00e986c5b8536435ea31ebf5aaf13aed17" }
-embassy-rp = { git = "https://github.com/embassy-rs/embassy.git", rev = "17301c00e986c5b8536435ea31ebf5aaf13aed17" }
-embassy-sync = { git = "https://github.com/embassy-rs/embassy.git", rev = "17301c00e986c5b8536435ea31ebf5aaf13aed17" }
-embassy-futures = { git = "https://github.com/embassy-rs/embassy.git", rev = "17301c00e986c5b8536435ea31ebf5aaf13aed17" }
-embassy-time = { git = "https://github.com/embassy-rs/embassy.git", rev = "17301c00e986c5b8536435ea31ebf5aaf13aed17" }
-embassy-embedded-hal = { git = "https://github.com/embassy-rs/embassy.git", rev = "17301c00e986c5b8536435ea31ebf5aaf13aed17" }
-cyw43 = { git = "https://github.com/embassy-rs/embassy.git", rev = "17301c00e986c5b8536435ea31ebf5aaf13aed17" }
-cyw43-pio = { git = "https://github.com/embassy-rs/embassy.git", rev = "17301c00e986c5b8536435ea31ebf5aaf13aed17" }
+# embassy-executor = { git = "https://github.com/embassy-rs/embassy.git", rev = "17301c00e986c5b8536435ea31ebf5aaf13aed17" }
+# embassy-rp = { git = "https://github.com/embassy-rs/embassy.git", rev = "17301c00e986c5b8536435ea31ebf5aaf13aed17" }
+# embassy-sync = { git = "https://github.com/embassy-rs/embassy.git", rev = "17301c00e986c5b8536435ea31ebf5aaf13aed17" }
+# embassy-futures = { git = "https://github.com/embassy-rs/embassy.git", rev = "17301c00e986c5b8536435ea31ebf5aaf13aed17" }
+# embassy-time = { git = "https://github.com/embassy-rs/embassy.git", rev = "17301c00e986c5b8536435ea31ebf5aaf13aed17" }
+# embassy-embedded-hal = { git = "https://github.com/embassy-rs/embassy.git", rev = "17301c00e986c5b8536435ea31ebf5aaf13aed17" }
+embassy-executor = { path = "../embassy/embassy-executor" }
+embassy-rp = { path = "../embassy/embassy-rp" }
+embassy-sync = { path = "../embassy/embassy-sync" }
+embassy-futures = { path = "../embassy/embassy-futures" }
+embassy-time = { path = "../embassy/embassy-time" }
+embassy-embedded-hal = { path = "../embassy/embassy-embedded-hal" }
+# cyw43 = { git = "https://github.com/embassy-rs/embassy.git", rev = "17301c00e986c5b8536435ea31ebf5aaf13aed17" }
+# cyw43-pio = { git = "https://github.com/embassy-rs/embassy.git", rev = "17301c00e986c5b8536435ea31ebf5aaf13aed17" }
+cyw43 = { path = "../embassy/cyw43" }
+cyw43-pio = { path = "../embassy/cyw43-pio" }
 trouble-host = { git = "https://github.com/embassy-rs/trouble.git", rev = "7700932050221fa68a274fe713f7d1eb3d477ea2" }

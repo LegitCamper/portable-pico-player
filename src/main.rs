@@ -73,14 +73,14 @@ async fn main(spawner: Spawner) {
 
         // Now that the card is initialized, the SPI clock can go faster
         let mut config = spi::Config::default();
-        config.frequency = 32_000_000;
+        config.frequency = 62_000_000;
         sdcard.spi(|dev| dev.bus_mut().set_config(&config));
         sdcard
     };
 
     // i2s DAC
     let i2s = {
-        const SAMPLE_RATE: u32 = 8_000;
+        const SAMPLE_RATE: u32 = 16_000;
         const BIT_DEPTH: u32 = 16; // this is the highest bit depth for stereo?
         const CHANNELS: u32 = 2;
 
@@ -142,7 +142,7 @@ async fn reader(sdcard: SD, mut i2s: PioI2sOut<'static, PIO0, 0>) {
         let artist_dir = root.open_dir(artist.name.as_str()).await.unwrap();
         let album = &artist.albums[0];
         let album_dir = artist_dir.open_dir(album.name.as_str()).await.unwrap();
-        let song_name = &album.songs[3];
+        let song_name = &album.songs[4];
         let file = album_dir
             .open_file_in_dir(
                 ShortFileName::create_from_str(song_name.as_str()).unwrap(),

@@ -25,6 +25,7 @@ pub async fn play_file<'a>(
         "Audio info:  {}hz, {}bit, {} channels",
         sample_rate, bit_depth, channels
     );
+    // i2s.update_config(sample_rate, 16, 2);
 
     // Calculate the time needed to fill the buffer based on sample rate and buffer size
     let expected_fill_time =
@@ -100,13 +101,6 @@ pub async fn fill_back(
     // ...
 
     to_uniform_stereo_32(read_slice, back_buffer, bit_depth, channels);
-
-    // add gain if needed
-    // back_buffer.iter_mut().for_each(|sample| {
-    //     let left = apply_gain((*sample >> 16) as u16, gain);
-    //     let right = apply_gain(*sample as u16, gain);
-    //     *sample = (left as u32) << 16 | right as u32;
-    // });
 }
 
 // converts any bit rate and channel into 32bit stereo audio
