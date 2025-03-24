@@ -47,17 +47,16 @@ pub async fn play_file<'a>(
 
         // Read the next chunk of data into the back buffer asynchronously while sending front buffer.
         let back_buffer_fut = async {
-            fill_back(audio_file, &mut back_buffer, bit_depth, channels).await;
-            // if let Err(_) = with_timeout(
-            //     expected_fill_time,
-            //     fill_back(audio_file, &mut back_buffer, bit_depth, channels ),
-            // )
-            // .await
-            // {
-            //     info!("Filling with silence due to timeout.");
-            //     // Fill with silence bc reading took too long
-            //     back_buffer.fill(0);
-            // }
+            if let Err(_) = with_timeout(
+                expected_fill_time,
+                fill_back(audio_file, &mut back_buffer, bit_depth, channels),
+            )
+            .await
+            {
+                info!("Filling with silence due to timeout.");
+                // Fill with silence bc reading took too long
+                back_buffer.fill(0);
+            }
         };
 
         // Execute the two tasks concurrently.

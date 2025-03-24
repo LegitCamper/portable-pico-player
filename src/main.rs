@@ -54,9 +54,9 @@ async fn main(spawner: Spawner) {
     media_ui.init();
 
     // Set up SPI0 for the Micro SD reader
-    let sdcard_block_device = {
+    let sdcard = {
         let mut config = spi::Config::default();
-        config.frequency = 16_000_000;
+        config.frequency = 400_000;
         let spi = spi::Spi::new(
             p.SPI0,
             p.PIN_2,
@@ -69,7 +69,13 @@ async fn main(spawner: Spawner) {
         let cs = Output::new(p.PIN_5, Level::High);
 
         let device = ExclusiveDevice::new(spi, cs, embassy_time::Delay).unwrap();
-        device
+        let sdcard = SdCard::new(device, embassy_time::Delay);
+
+        // Now that the card is initialized, the SPI clock can go faster
+        let mut config = spi::Config::default();
+        config.frequency = 32_000_000;
+        sdcard.spi(|dev| dev.bus_mut().set_config(&config));
+        sdcard
     };
 
     // i2s DAC
@@ -101,19 +107,11 @@ async fn main(spawner: Spawner) {
             &program,
         )
     };
-    unwrap!(spawner.spawn(reader(sdcard_block_device, i2s)))
+    unwrap!(spawner.spawn(reader(sdcard, i2s)))
 }
 
 #[embassy_executor::task]
-async fn reader(
-    block_device: ExclusiveDevice<
-        Spi<'static, SPI0, spi::Async>,
-        Output<'static>,
-        embassy_time::Delay,
-    >,
-    mut i2s: PioI2sOut<'static, PIO0, 0>,
-) {
-    let sdcard = SdCard::new(block_device, embassy_time::Delay);
+async fn reader(sdcard: SD, mut i2s: PioI2sOut<'static, PIO0, 0>) {
     let volume_mgr = VolumeManager::<_, _, MAX_DIRS, MAX_FILES, MAX_VOLUMES>::new_with_limits(
         sdcard,
         DummyTimeSource {},
