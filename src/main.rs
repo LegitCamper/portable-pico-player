@@ -1,6 +1,7 @@
 #![no_std]
 #![no_main]
 #![feature(inherent_str_constructors)]
+#![feature(impl_trait_in_assoc_type)]
 
 use audio_parser::AudioFile;
 use core::default::Default;
@@ -58,13 +59,7 @@ async fn main(spawner: Spawner) {
         let mut config = spi::Config::default();
         config.frequency = 400_000;
         let spi = spi::Spi::new(
-            p.SPI0,
-            p.PIN_2,
-            p.PIN_3,
-            p.PIN_4,
-            p.DMA_CH1,
-            p.DMA_CH2,
-            spi::Config::default(),
+            p.SPI0, p.PIN_2, p.PIN_3, p.PIN_4, p.DMA_CH1, p.DMA_CH2, config,
         );
         let cs = Output::new(p.PIN_5, Level::High);
 
@@ -92,6 +87,8 @@ async fn main(spawner: Spawner) {
         let bit_clock_pin = p.PIN_18; // bclk
         let left_right_clock_pin = p.PIN_19; // wsel
         let data_pin = p.PIN_20; // din
+
+        let _deem = Output::new(p.PIN_8, Level::High);
 
         let program = PioI2sOutProgram::new(&mut common);
         PioI2sOut::new(
